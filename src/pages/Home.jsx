@@ -55,6 +55,10 @@ export default function Home() {
           </div>
         ))}
       </div>
+
+      <p className="mt-10 text-xs text-gray-600">
+        Starting prices and stats based on the 2024/25 Premier League season.
+      </p>
     </div>
   )
 }

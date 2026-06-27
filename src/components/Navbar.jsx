@@ -39,6 +39,7 @@ export default function Navbar() {
                 {navLink('/market', 'Market')}
                 {navLink('/portfolio', 'Portfolio')}
                 {navLink('/leaderboard', 'Leaderboard')}
+                {navLink('/admin', 'Simulate')}
               </div>
             )}
           </div>
@@ -78,6 +79,7 @@ export default function Navbar() {
             {navLink('/market', 'Market')}
             {navLink('/portfolio', 'Portfolio')}
             {navLink('/leaderboard', 'Leaderboard')}
+            {navLink('/admin', 'Simulate')}
           </div>
         )}
       </div>

@@ -5,89 +5,10 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const LEAGUE_ID = 39   // Premier League
-const SEASON    = 2025 // 2025/26 season
-
-// ── API-Football helpers ────────────────────────────────────────────────────
-
-async function apiFetch(path: string, apiKey: string) {
-  const res = await fetch(`https://v3.football.api-sports.io${path}`, {
-    headers: {
-      'x-apisports-key': apiKey,
-      'x-rapidapi-host': 'v3.football.api-sports.io',
-    },
-  })
-  if (!res.ok) throw new Error(`API-Football ${path} → ${res.status}`)
-  const json = await res.json()
-  if (json.errors && Object.keys(json.errors).length > 0) {
-    throw new Error(`API-Football error: ${JSON.stringify(json.errors)}`)
-  }
-  return json.response
-}
-
-// ── Name normalisation for fuzzy matching ───────────────────────────────────
-
-function normaliseName(name: string): string {
-  return name
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '') // strip combining accents
-    .replace(/ø/g, 'o')         // ø → o
-    .replace(/æ/g, 'ae')        // æ → ae
-    .replace(/[-_.]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-/** Returns true if the two names plausibly refer to the same player. */
-function namesMatch(ourName: string, apiName: string): boolean {
-  const a = normaliseName(ourName)
-  const b = normaliseName(apiName)
-  if (a === b) return true
-
-  const aWords = a.split(' ')
-  const bWords = b.split(' ')
-
-  // Last-name match (both have ≥2 words and last words equal)
-  const aLast = aWords[aWords.length - 1]
-  const bLast = bWords[bWords.length - 1]
-  if (aLast === bLast && aLast.length > 3) {
-    // Confirm with first initial or first name overlap
-    if (aWords[0][0] === bWords[0][0]) return true
-  }
-
-  // One is a substring of the other (handles "Alisson" ↔ "Alisson Becker")
-  if (a.includes(b) || b.includes(a)) return true
-
-  // Reversed-token match: "Son Heung-min" ↔ "Heung-Min Son"
-  const aRev = [...aWords].reverse().join(' ')
-  if (aRev === b) return true
-
-  return false
-}
-
-// ── Clean-sheet detection ───────────────────────────────────────────────────
-
-/** Build a map of teamId → didKeepCleanSheet for this fixture. */
-function cleanSheetMap(fixture: FixtureInfo): Map<number, boolean> {
-  const { home, away } = fixture.goals
-  return new Map([
-    [fixture.teams.home.id, away === 0],
-    [fixture.teams.away.id, home === 0],
-  ])
-}
+const LEAGUE_ID = 39
+const SEASON    = 2025
 
 // ── Types ───────────────────────────────────────────────────────────────────
-
-interface FixtureInfo {
-  id: number
-  status: string // "FT" | "NS" | etc.
-  teams: {
-    home: { id: number; name: string }
-    away: { id: number; name: string }
-  }
-  goals: { home: number; away: number }
-}
 
 interface PlayerStats {
   goals: number
@@ -99,124 +20,189 @@ interface PlayerStats {
   played: boolean
 }
 
-// ── Edge Function ───────────────────────────────────────────────────────────
+interface FixtureInfo {
+  id: number
+  status: string
+  teams: { home: { id: number; name: string }; away: { id: number; name: string } }
+  goals: { home: number; away: number }
+}
 
-Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
+// ── Simulation ──────────────────────────────────────────────────────────────
+
+function generateSimulatedStats(position: string): PlayerStats {
+  const plays = Math.random() > 0.12
+  if (!plays) return { goals: 0, assists: 0, rating: 0, minutes: 0, saves: 0, clean_sheet: false, played: false }
+
+  const minutes = Math.random() > 0.2 ? 90 : Math.floor(Math.random() * 55 + 30)
+
+  if (position === 'Goalkeeper') {
+    const saves      = Math.floor(Math.random() * 7)
+    const clean_sheet = Math.random() > 0.52
+    const base       = 5.8 + Math.random() * 2.2
+    const rating     = parseFloat(Math.min(10, base + saves * 0.07 + (clean_sheet ? 0.4 : -0.15)).toFixed(1))
+    return { goals: 0, assists: 0, rating, minutes, saves, clean_sheet, played: true }
   }
 
-  try {
-    const apiKey = Deno.env.get('API_FOOTBALL_KEY')
-    if (!apiKey) throw new Error('API_FOOTBALL_KEY secret not set')
+  if (position === 'Defender') {
+    const goals       = Math.random() < 0.07 ? 1 : 0
+    const assists     = Math.random() < 0.10 ? 1 : 0
+    const clean_sheet = Math.random() > 0.52
+    const base        = 5.8 + Math.random() * 2.2
+    const rating      = parseFloat(Math.min(10, base + goals * 0.7 + assists * 0.3 + (clean_sheet ? 0.3 : -0.1)).toFixed(1))
+    return { goals, assists, rating, minutes, saves: 0, clean_sheet, played: true }
+  }
 
+  if (position === 'Midfielder') {
+    const goals   = Math.random() < 0.14 ? (Math.random() < 0.2 ? 2 : 1) : 0
+    const assists  = Math.random() < 0.22 ? (Math.random() < 0.15 ? 2 : 1) : 0
+    const base     = 5.8 + Math.random() * 2.5
+    const rating   = parseFloat(Math.min(10, base + goals * 0.5 + assists * 0.25).toFixed(1))
+    return { goals, assists, rating, minutes, saves: 0, clean_sheet: false, played: true }
+  }
+
+  // Forward
+  const goals   = Math.random() < 0.35 ? (Math.random() < 0.3 ? (Math.random() < 0.15 ? 3 : 2) : 1) : 0
+  const assists  = Math.random() < 0.18 ? 1 : 0
+  const base     = 5.8 + Math.random() * 2.5
+  const rating   = parseFloat(Math.min(10, base + goals * 0.65 + assists * 0.25).toFixed(1))
+  return { goals, assists, rating, minutes, saves: 0, clean_sheet: false, played: true }
+}
+
+// ── API-Football helpers ─────────────────────────────────────────────────────
+
+async function apiFetch(path: string, apiKey: string) {
+  const res = await fetch(`https://v3.football.api-sports.io${path}`, {
+    headers: { 'x-apisports-key': apiKey, 'x-rapidapi-host': 'v3.football.api-sports.io' },
+  })
+  if (!res.ok) throw new Error(`API-Football ${path} → ${res.status}`)
+  const json = await res.json()
+  if (json.errors && Object.keys(json.errors).length > 0) {
+    throw new Error(`API-Football error: ${JSON.stringify(json.errors)}`)
+  }
+  return json.response
+}
+
+function normaliseName(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/ø/g, 'o').replace(/æ/g, 'ae')
+    .replace(/[-_.]/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function namesMatch(ourName: string, apiName: string): boolean {
+  const a = normaliseName(ourName)
+  const b = normaliseName(apiName)
+  if (a === b) return true
+  const aWords = a.split(' '), bWords = b.split(' ')
+  const aLast = aWords[aWords.length - 1], bLast = bWords[bWords.length - 1]
+  if (aLast === bLast && aLast.length > 3 && aWords[0][0] === bWords[0][0]) return true
+  if (a.includes(b) || b.includes(a)) return true
+  if ([...aWords].reverse().join(' ') === b) return true
+  return false
+}
+
+function cleanSheetMap(fixture: FixtureInfo): Map<number, boolean> {
+  const { home, away } = fixture.goals
+  return new Map([
+    [fixture.teams.home.id, away === 0],
+    [fixture.teams.away.id, home === 0],
+  ])
+}
+
+// ── Price change formula (shared) ────────────────────────────────────────────
+
+function calcChangePct(stats: PlayerStats): number {
+  if (!stats.played) return -1
+  let pct = 0
+  pct += stats.goals   * 5
+  pct += stats.assists * 3
+  if (stats.rating >= 8.0)      pct += 3
+  else if (stats.rating >= 7.0) pct += 1
+  else if (stats.rating < 6.0)  pct -= 3
+  if (stats.clean_sheet) pct += 4
+  if (stats.saves >= 5)  pct += 2
+  return Math.max(-15, Math.min(15, pct))
+}
+
+// ── Edge Function ────────────────────────────────────────────────────────────
+
+Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
+
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+
+  try {
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
     )
 
-    // Optional request body: { matchday?: number, dry_run?: boolean }
-    let targetMatchday: number | null = null
-    let dryRun = false
-    try {
-      const body = await req.json()
-      if (body.matchday) targetMatchday = parseInt(body.matchday)
-      if (body.dry_run)  dryRun = true
-    } catch { /* no body is fine */ }
+    let body: any = {}
+    try { body = await req.json() } catch { /* no body */ }
+    const targetMatchday: number | null = body.matchday ? parseInt(body.matchday) : null
+    const dryRun   = body.dry_run  ?? false
+    const simulate = body.simulate ?? false
 
-    // ── 1. Determine which matchday to process ──────────────────────────────
+    // ── 1. Current matchday ─────────────────────────────────────────────────
     const { data: tracker } = await supabase
-      .from('matchday_tracker')
-      .select('current_matchday')
-      .eq('id', 1)
-      .single()
-
+      .from('matchday_tracker').select('current_matchday').eq('id', 1).single()
     const currentMatchday = tracker?.current_matchday ?? 0
     const matchday = targetMatchday ?? currentMatchday + 1
 
-    if (matchday > 38) {
-      return new Response(
-        JSON.stringify({ message: 'Season complete — all 38 matchdays processed.' }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-      )
-    }
+    if (matchday > 38) return json({ message: 'Season complete — all 38 matchdays processed.' })
 
-    // ── 2. Fetch Premier League fixtures for this round ─────────────────────
-    const round = `Regular Season - ${matchday}`
-    const fixturesRaw = await apiFetch(
-      `/fixtures?league=${LEAGUE_ID}&season=${SEASON}&round=${encodeURIComponent(round)}`,
-      apiKey,
-    )
-
-    if (!fixturesRaw || fixturesRaw.length === 0) {
-      return new Response(
-        JSON.stringify({ message: `No fixtures found for ${round}` }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-      )
-    }
-
-    const fixtures: FixtureInfo[] = fixturesRaw.map((f: any) => ({
-      id:     f.fixture.id,
-      status: f.fixture.status.short,
-      teams:  { home: f.teams.home, away: f.teams.away },
-      goals:  { home: f.goals.home ?? 0, away: f.goals.away ?? 0 },
-    }))
-
-    // Guard: all fixtures must be finished
-    const unfinished = fixtures.filter(f => f.status !== 'FT' && f.status !== 'AET' && f.status !== 'PEN')
-    if (unfinished.length > 0) {
-      return new Response(
-        JSON.stringify({
-          message: `Round ${matchday} not fully finished yet`,
-          unfinished: unfinished.map(f => `${f.teams.home.name} v ${f.teams.away.name} [${f.status}]`),
-        }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-      )
-    }
-
-    // ── 3. Fetch player stats for every fixture (parallel) ──────────────────
-    // Map: normalised player name → PlayerStats
+    // ── 2. Build stat map ───────────────────────────────────────────────────
     const apiStatMap = new Map<string, PlayerStats>()
+    let fixtureCount = 0
 
-    await Promise.all(
-      fixtures.map(async (fixture) => {
+    if (!simulate) {
+      const apiKey = Deno.env.get('API_FOOTBALL_KEY')
+      if (!apiKey) throw new Error('API_FOOTBALL_KEY secret not set')
+
+      const round = `Regular Season - ${matchday}`
+      const fixturesRaw = await apiFetch(
+        `/fixtures?league=${LEAGUE_ID}&season=${SEASON}&round=${encodeURIComponent(round)}`, apiKey,
+      )
+      if (!fixturesRaw || fixturesRaw.length === 0) return json({ message: `No fixtures found for ${round}` })
+
+      const fixtures: FixtureInfo[] = fixturesRaw.map((f: any) => ({
+        id: f.fixture.id, status: f.fixture.status.short,
+        teams: { home: f.teams.home, away: f.teams.away },
+        goals: { home: f.goals.home ?? 0, away: f.goals.away ?? 0 },
+      }))
+
+      const unfinished = fixtures.filter(f => !['FT','AET','PEN'].includes(f.status))
+      if (unfinished.length > 0) {
+        return json({ message: `Round ${matchday} not fully finished`, unfinished: unfinished.map(f => `${f.teams.home.name} v ${f.teams.away.name} [${f.status}]`) })
+      }
+      fixtureCount = fixtures.length
+
+      await Promise.all(fixtures.map(async (fixture) => {
         const csMap = cleanSheetMap(fixture)
         const playersRaw = await apiFetch(`/fixtures/players?fixture=${fixture.id}`, apiKey)
-
         for (const teamData of (playersRaw ?? [])) {
-          const teamId: number = teamData.team.id
-          const keptCleanSheet = csMap.get(teamId) ?? false
-
+          const keptCleanSheet = csMap.get(teamData.team.id) ?? false
           for (const entry of (teamData.players ?? [])) {
-            const apiName: string = entry.player.name
             const stats = entry.statistics?.[0]
             if (!stats) continue
-
             const minutes = stats.games?.minutes ?? 0
-            const rating  = parseFloat(stats.games?.rating ?? '0') || 0
-            const goals   = stats.goals?.total ?? 0
-            const assists = stats.goals?.assists ?? 0
-            const saves   = stats.goals?.saves ?? 0
-
-            const normKey = normaliseName(apiName)
-            apiStatMap.set(normKey, {
-              goals,
-              assists,
-              rating,
-              minutes,
-              saves,
-              clean_sheet: minutes > 0 && keptCleanSheet,
-              played: minutes > 0,
+            apiStatMap.set(normaliseName(entry.player.name), {
+              goals: stats.goals?.total ?? 0, assists: stats.goals?.assists ?? 0,
+              rating: parseFloat(stats.games?.rating ?? '0') || 0,
+              minutes, saves: stats.goals?.saves ?? 0,
+              clean_sheet: minutes > 0 && keptCleanSheet, played: minutes > 0,
             })
           }
         }
-      }),
-    )
+      }))
+    }
 
-    // ── 4. Load our players and match against the API stat map ──────────────
+    // ── 3. Load players ─────────────────────────────────────────────────────
     const { data: players, error: playersError } = await supabase
-      .from('players')
-      .select('id, name, position, current_price')
+      .from('players').select('id, name, position, current_price')
     if (playersError) throw playersError
 
     const priceHistoryInserts: any[] = []
@@ -225,72 +211,41 @@ Deno.serve(async (req) => {
     const matchLog: any[]            = []
 
     for (const player of (players as any[])) {
-      // Find matching API entry
-      let matched: PlayerStats | null = null
-      for (const [normApiName, ps] of apiStatMap) {
-        if (namesMatch(player.name, normApiName)) {
-          matched = ps
-          break
-        }
-      }
+      let stats: PlayerStats
 
-      const stats: PlayerStats = matched ?? {
-        goals: 0, assists: 0, rating: 0,
-        minutes: 0, saves: 0, clean_sheet: false, played: false,
-      }
-
-      // Price change calculation
-      let changePct = 0
-      if (!stats.played) {
-        changePct = -1  // DNP penalty
+      if (simulate) {
+        stats = generateSimulatedStats(player.position)
       } else {
-        changePct += stats.goals   * 5
-        changePct += stats.assists * 3
-        if (stats.rating >= 8.0) changePct += 3
-        else if (stats.rating >= 7.0) changePct += 1
-        else if (stats.rating < 6.0) changePct -= 3
-        if (stats.clean_sheet) changePct += 4
-        if (stats.saves >= 5)  changePct += 2
+        let matched: PlayerStats | null = null
+        for (const [normApiName, ps] of apiStatMap) {
+          if (namesMatch(player.name, normApiName)) { matched = ps; break }
+        }
+        stats = matched ?? { goals: 0, assists: 0, rating: 0, minutes: 0, saves: 0, clean_sheet: false, played: false }
       }
-      changePct = Math.max(-15, Math.min(15, changePct))
 
-      const newPrice = parseFloat(
-        Math.max(1, player.current_price * (1 + changePct / 100)).toFixed(2),
-      )
+      const changePct = calcChangePct(stats)
+      const newPrice  = parseFloat(Math.max(1, player.current_price * (1 + changePct / 100)).toFixed(2))
 
       priceHistoryInserts.push({ player_id: player.id, price: newPrice, matchday })
       statsInserts.push({
-        player_id:        player.id,
-        matchday,
-        goals:            stats.goals,
-        assists:          stats.assists,
-        rating:           stats.played ? stats.rating : 0,
-        minutes:          stats.minutes,
-        saves:            stats.saves,
-        clean_sheet:      stats.clean_sheet,
-        price_change_pct: changePct,
+        player_id: player.id, matchday,
+        goals: stats.goals, assists: stats.assists,
+        rating: stats.played ? stats.rating : 0,
+        minutes: stats.minutes, saves: stats.saves,
+        clean_sheet: stats.clean_sheet, price_change_pct: changePct,
       })
       priceUpdates.push({ id: player.id, current_price: newPrice })
       matchLog.push({
-        player:     player.name,
-        matched:    !!matched,
-        goals:      stats.goals,
-        assists:    stats.assists,
-        rating:     stats.rating,
-        minutes:    stats.minutes,
-        changePct,
-        newPrice,
+        player: player.name, position: player.position,
+        played: stats.played, goals: stats.goals, assists: stats.assists,
+        rating: stats.rating, saves: stats.saves, clean_sheet: stats.clean_sheet,
+        changePct, oldPrice: player.current_price, newPrice,
       })
     }
 
-    if (dryRun) {
-      return new Response(
-        JSON.stringify({ dry_run: true, matchday, log: matchLog }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-      )
-    }
+    if (dryRun) return json({ dry_run: true, simulate, matchday, log: matchLog })
 
-    // ── 5. Write to database ────────────────────────────────────────────────
+    // ── 4. Write to database ────────────────────────────────────────────────
     const { error: phError } = await supabase.from('price_history').insert(priceHistoryInserts)
     if (phError) throw phError
 
@@ -303,16 +258,46 @@ Deno.serve(async (req) => {
 
     await supabase.from('matchday_tracker').update({ current_matchday: matchday }).eq('id', 1)
 
-    return new Response(
-      JSON.stringify({ success: true, matchday, fixtures: fixtures.length, log: matchLog }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-    )
+    // ── 5. Process pending limit orders ─────────────────────────────────────
+    const newPriceMap = new Map(priceUpdates.map((u: any) => [u.id, u.current_price]))
+    const { data: pendingOrders } = await supabase.from('limit_orders').select('*').eq('status', 'pending')
+
+    for (const order of (pendingOrders ?? [])) {
+      const newPrice = newPriceMap.get(order.player_id)
+      if (newPrice == null) continue
+      const shouldFill =
+        (order.order_type === 'buy'  && newPrice <= order.target_price) ||
+        (order.order_type === 'sell' && newPrice >= order.target_price)
+      if (!shouldFill) continue
+      try {
+        if (order.order_type === 'buy') {
+          const { data: userRow } = await supabase.from('users').select('balance').eq('id', order.user_id).single()
+          const cost = order.shares * newPrice
+          if (!userRow || userRow.balance < cost) { await supabase.from('limit_orders').update({ status: 'cancelled' }).eq('id', order.id); continue }
+          const { data: holding } = await supabase.from('portfolios').select('shares, avg_buy_price').eq('user_id', order.user_id).eq('player_id', order.player_id).maybeSingle()
+          const existingShares = holding?.shares ?? 0
+          const newShares = existingShares + order.shares
+          const newAvg = existingShares === 0 ? newPrice : ((holding.avg_buy_price * existingShares) + (newPrice * order.shares)) / newShares
+          await supabase.from('users').update({ balance: userRow.balance - cost }).eq('id', order.user_id)
+          await supabase.from('portfolios').upsert({ user_id: order.user_id, player_id: order.player_id, shares: newShares, avg_buy_price: parseFloat(newAvg.toFixed(2)) }, { onConflict: 'user_id,player_id' })
+        } else {
+          const { data: holding } = await supabase.from('portfolios').select('shares').eq('user_id', order.user_id).eq('player_id', order.player_id).maybeSingle()
+          if (!holding || holding.shares < order.shares) { await supabase.from('limit_orders').update({ status: 'cancelled' }).eq('id', order.id); continue }
+          const { data: userRow } = await supabase.from('users').select('balance').eq('id', order.user_id).single()
+          const proceeds = order.shares * newPrice
+          const newShares = holding.shares - order.shares
+          await supabase.from('users').update({ balance: userRow.balance + proceeds }).eq('id', order.user_id)
+          if (newShares === 0) { await supabase.from('portfolios').delete().eq('user_id', order.user_id).eq('player_id', order.player_id) }
+          else { await supabase.from('portfolios').update({ shares: newShares }).eq('user_id', order.user_id).eq('player_id', order.player_id) }
+        }
+        await supabase.from('limit_orders').update({ status: 'filled', filled_at: new Date().toISOString() }).eq('id', order.id)
+      } catch (err) { console.error(`limit order ${order.id} failed:`, err) }
+    }
+
+    return json({ success: true, matchday, simulate, fixtures: fixtureCount, log: matchLog })
 
   } catch (err) {
     console.error(err)
-    return new Response(
-      JSON.stringify({ error: (err as Error).message }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-    )
+    return json({ error: (err as Error).message }, 500)
   }
 })

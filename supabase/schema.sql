@@ -64,11 +64,27 @@ create table if not exists matchday_tracker (
 
 insert into matchday_tracker (id, current_matchday) values (1, 0) on conflict do nothing;
 
+-- Limit orders table
+create table if not exists limit_orders (
+  id uuid primary key default uuid_generate_v4(),
+  user_id uuid references users(id) on delete cascade,
+  player_id uuid references players(id) on delete cascade,
+  order_type text not null check (order_type in ('buy', 'sell')),
+  shares integer not null check (shares > 0),
+  target_price numeric(10,2) not null check (target_price > 0),
+  status text not null default 'pending' check (status in ('pending', 'filled', 'cancelled')),
+  created_at timestamptz default now(),
+  filled_at timestamptz
+);
+
 -- Indexes
 create index if not exists idx_price_history_player_id on price_history(player_id);
 create index if not exists idx_price_history_matchday on price_history(matchday);
 create index if not exists idx_portfolios_user_id on portfolios(user_id);
 create index if not exists idx_matchday_stats_player_id on matchday_stats(player_id);
+create index if not exists idx_limit_orders_user_id on limit_orders(user_id);
+create index if not exists idx_limit_orders_player_id on limit_orders(player_id);
+create index if not exists idx_limit_orders_status on limit_orders(status);
 
 -- RLS Policies
 alter table players enable row level security;
@@ -91,6 +107,10 @@ create policy "users_own_update" on users for update using (auth.uid() = id);
 
 -- Portfolios: users can only access their own
 create policy "portfolios_own" on portfolios for all using (auth.uid() = user_id);
+
+-- Limit orders: users can only access their own
+alter table limit_orders enable row level security;
+create policy "limit_orders_own" on limit_orders for all using (auth.uid() = user_id);
 
 -- Matchday stats: anyone can read
 create policy "matchday_stats_public_read" on matchday_stats for select using (true);

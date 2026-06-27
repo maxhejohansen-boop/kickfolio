@@ -9,7 +9,6 @@ export default function Portfolio() {
   const [holdings, setHoldings] = useState([])
   const [loading, setLoading] = useState(true)
   const [selectedPlayer, setSelectedPlayer] = useState(null)
-  const [selectedMode, setSelectedMode] = useState('buy')
 
   useEffect(() => {
     if (user) fetchHoldings()
@@ -25,9 +24,8 @@ export default function Portfolio() {
     setLoading(false)
   }
 
-  function openModal(player, mode = 'buy') {
+  function openModal(player) {
     setSelectedPlayer(player)
-    setSelectedMode(mode)
   }
 
   const currentValue = holdings.reduce(
@@ -93,7 +91,6 @@ export default function Portfolio() {
                 <th className="text-right text-xs text-gray-500 font-medium px-4 py-3 hidden md:table-cell">Invested</th>
                 <th className="text-right text-xs text-gray-500 font-medium px-4 py-3">Value</th>
                 <th className="text-right text-xs text-gray-500 font-medium px-4 py-3">P&L</th>
-                <th className="px-4 py-3" />
               </tr>
             </thead>
             <tbody>
@@ -107,7 +104,7 @@ export default function Portfolio() {
                   <tr
                     key={h.id}
                     className="border-b border-[#1e2330] last:border-0 hover:bg-[#161a21] cursor-pointer transition-colors"
-                    onClick={() => openModal(h.players, 'buy')}
+                    onClick={() => openModal(h.players)}
                   >
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
@@ -133,14 +130,6 @@ export default function Portfolio() {
                         {plPct >= 0 ? '+' : ''}{plPct.toFixed(1)}%
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-right">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); openModal(h.players, 'sell') }}
-                        className="text-xs font-medium text-red-400 hover:text-red-300 border border-red-400/30 hover:border-red-400/60 rounded px-2 py-1 transition-colors"
-                      >
-                        Sell
-                      </button>
-                    </td>
                   </tr>
                 )
               })}
@@ -152,7 +141,7 @@ export default function Portfolio() {
       {selectedPlayer && (
         <PlayerModal
           player={selectedPlayer}
-          defaultMode={selectedMode}
+          showActionsTab
           onClose={() => setSelectedPlayer(null)}
           onTrade={() => { fetchHoldings(); refreshUserRecord() }}
         />

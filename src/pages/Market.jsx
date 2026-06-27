@@ -42,6 +42,7 @@ export default function Market() {
         <div>
           <h1 className="text-2xl font-bold text-white">Market</h1>
           <p className="text-sm text-gray-500 mt-0.5">Matchday {matchday} · {players.length} players</p>
+          <p className="text-xs text-gray-600 mt-0.5">Starting prices based on 2024/25 season stats</p>
         </div>
         <input
           type="text"

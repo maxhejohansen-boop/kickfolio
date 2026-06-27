@@ -7,6 +7,7 @@ import Signup from './pages/Signup'
 import Market from './pages/Market'
 import Portfolio from './pages/Portfolio'
 import Leaderboard from './pages/Leaderboard'
+import Admin from './pages/Admin'
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
@@ -28,6 +29,7 @@ function AppRoutes() {
           <ProtectedRoute><Portfolio /></ProtectedRoute>
         } />
         <Route path="/leaderboard" element={<Leaderboard />} />
+        <Route path="/admin" element={<Admin />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>
