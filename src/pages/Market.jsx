@@ -4,37 +4,84 @@ import PlayerCard from '../components/PlayerCard'
 
 const POSITIONS = ['All', 'Forward', 'Midfielder', 'Defender', 'Goalkeeper']
 
+const SORT_OPTIONS = [
+  { label: 'Price',   key: 'current_price' },
+  { label: 'Change',  key: 'changePct' },
+  { label: 'Goals',   key: 'goals' },
+  { label: 'Assists', key: 'assists' },
+  { label: 'Rating',  key: 'rating' },
+  { label: 'Saves',   key: 'saves' },
+]
+
 export default function Market() {
   const [players, setPlayers] = useState([])
+  const [statsMap, setStatsMap] = useState({})
+  const [appsMap, setAppsMap] = useState({})
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('All')
   const [search, setSearch] = useState('')
   const [matchday, setMatchday] = useState(0)
+  const [sortKey, setSortKey] = useState('current_price')
+  const [sortDir, setSortDir] = useState(-1)
 
   useEffect(() => {
-    fetchPlayers()
-    fetchMatchday()
+    fetchAll()
   }, [])
 
-  async function fetchPlayers() {
-    const { data } = await supabase
-      .from('players')
-      .select('*')
-      .order('current_price', { ascending: false })
-    setPlayers(data ?? [])
+  async function fetchAll() {
+    const [playersRes, trackerRes] = await Promise.all([
+      supabase.from('players').select('*'),
+      supabase.from('matchday_tracker').select('current_matchday').eq('id', 1).single(),
+    ])
+    const currentMatchday = trackerRes.data?.current_matchday ?? 0
+    setMatchday(currentMatchday)
+
+    const allPlayers = playersRes.data ?? []
+    setPlayers(allPlayers)
+
+    const [latestRes, appsRes] = await Promise.all([
+      currentMatchday > 0
+        ? supabase.from('matchday_stats').select('*').eq('matchday', currentMatchday)
+        : Promise.resolve({ data: [] }),
+      supabase.from('matchday_stats').select('player_id').gt('minutes', 0),
+    ])
+
+    const map = {}
+    for (const s of (latestRes.data ?? [])) map[s.player_id] = s
+    setStatsMap(map)
+
+    const appsCount = {}
+    for (const r of (appsRes.data ?? [])) {
+      appsCount[r.player_id] = (appsCount[r.player_id] ?? 0) + 1
+    }
+    setAppsMap(appsCount)
+
     setLoading(false)
   }
 
-  async function fetchMatchday() {
-    const { data } = await supabase.from('matchday_tracker').select('current_matchday').eq('id', 1).single()
-    setMatchday(data?.current_matchday ?? 0)
+  function handleSort(key) {
+    if (sortKey === key) setSortDir(d => d * -1)
+    else { setSortKey(key); setSortDir(-1) }
   }
 
-  const filtered = players.filter(p => {
-    const matchPos = filter === 'All' || p.position === filter
-    const matchSearch = p.name.toLowerCase().includes(search.toLowerCase()) || p.club.toLowerCase().includes(search.toLowerCase())
-    return matchPos && matchSearch
-  })
+  const filtered = players
+    .filter(p => {
+      const matchPos = filter === 'All' || p.position === filter
+      const matchSearch = p.name.toLowerCase().includes(search.toLowerCase()) || p.club.toLowerCase().includes(search.toLowerCase())
+      return matchPos && matchSearch
+    })
+    .map(p => {
+      const s = statsMap[p.id] ?? null
+      return {
+        ...p,
+        changePct: s?.price_change_pct ?? 0,
+        goals:     s?.goals   ?? 0,
+        assists:   s?.assists  ?? 0,
+        rating:    s?.rating   ?? 0,
+        saves:     s?.saves    ?? 0,
+      }
+    })
+    .sort((a, b) => sortDir * (b[sortKey] - a[sortKey]))
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
@@ -53,7 +100,7 @@ export default function Market() {
         />
       </div>
 
-      <div className="flex gap-2 mb-6 overflow-x-auto pb-1">
+      <div className="flex flex-wrap gap-2 mb-4 overflow-x-auto pb-1">
         {POSITIONS.map(pos => (
           <button
             key={pos}
@@ -69,6 +116,26 @@ export default function Market() {
         ))}
       </div>
 
+      <div className="flex flex-wrap gap-2 mb-6">
+        {SORT_OPTIONS.map(opt => {
+          const active = sortKey === opt.key
+          return (
+            <button
+              key={opt.key}
+              onClick={() => handleSort(opt.key)}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors flex items-center gap-1 ${
+                active
+                  ? 'bg-[#1e2330] text-white border border-gray-600'
+                  : 'bg-[#111318] border border-[#1e2330] text-gray-400 hover:text-white'
+              }`}
+            >
+              {opt.label}
+              {active && <span>{sortDir === -1 ? '↓' : '↑'}</span>}
+            </button>
+          )
+        })}
+      </div>
+
       {loading ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {Array.from({ length: 8 }).map((_, i) => (
@@ -80,7 +147,7 @@ export default function Market() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {filtered.map(player => (
-            <PlayerCard key={player.id} player={player} />
+            <PlayerCard key={player.id} player={player} latestStats={statsMap[player.id] ?? null} appearances={appsMap[player.id] ?? 0} />
           ))}
         </div>
       )}

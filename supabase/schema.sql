@@ -53,6 +53,7 @@ create table if not exists matchday_stats (
   saves integer default 0,
   clean_sheet boolean default false,
   price_change_pct numeric(5,2) default 0,
+  dnp_reason text,
   created_at timestamptz default now()
 );
 

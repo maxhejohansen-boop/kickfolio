@@ -73,12 +73,13 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
     const last5 = [...stats].slice(0, 5).reverse()
     setRecentChart(last5.map(s => ({
       matchday: s.matchday,
-      rating: s.rating ?? 0,
+      rating: s.minutes > 0 ? (s.rating ?? 0) : null,
       goals: s.goals ?? 0,
       assists: s.assists ?? 0,
       saves: s.saves ?? 0,
       clean_sheet: s.clean_sheet ?? false,
       minutes: s.minutes ?? 0,
+      dnp_reason: s.dnp_reason ?? null,
       price: priceMap[s.matchday] ?? null,
     })))
   }
@@ -229,6 +230,21 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
   const PerformanceTooltip = ({ active, payload }) => {
     if (!active || !payload?.length) return null
     const d = payload[0].payload
+    if (d.minutes === 0) {
+      return (
+        <div className="bg-[#161a21] border border-[#1e2330] rounded-lg px-3 py-2.5 text-xs space-y-1 min-w-[160px]">
+          <div className="text-gray-400 font-medium">Matchday {d.matchday}</div>
+          <div className="text-orange-400 font-semibold">Did not play</div>
+          {d.dnp_reason && <div className="text-gray-400">{d.dnp_reason}</div>}
+          {d.price != null && (
+            <div className="flex justify-between gap-4 pt-1 border-t border-[#1e2330]">
+              <span className="text-gray-500">Share price</span>
+              <span className="text-green-400 font-semibold">£{Number(d.price).toFixed(2)}</span>
+            </div>
+          )}
+        </div>
+      )
+    }
     return (
       <div className="bg-[#161a21] border border-[#1e2330] rounded-lg px-3 py-2.5 text-xs space-y-1 min-w-[130px]">
         <div className="text-gray-400 font-medium">Matchday {d.matchday}</div>
@@ -292,7 +308,7 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
 
       {recentChart.length > 0 ? (
         <div>
-          <div className="text-xs text-gray-500 mb-2 font-medium">Last {recentChart.length} games · Rating</div>
+          <div className="text-xs text-gray-500 mb-2 font-medium">Last {recentChart.length} matchdays · Rating</div>
           <div className="h-44">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={recentChart} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
@@ -324,6 +340,17 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
               </LineChart>
             </ResponsiveContainer>
           </div>
+          {recentChart.filter(d => d.minutes === 0).length > 0 && (
+            <div className="mt-3 space-y-1">
+              {recentChart.filter(d => d.minutes === 0).map(d => (
+                <div key={d.matchday} className="flex items-center gap-2 text-xs">
+                  <span className="text-gray-600">MD{d.matchday}</span>
+                  <span className="text-orange-400 font-medium">Did not play</span>
+                  {d.dnp_reason && <span className="text-gray-500">— {d.dnp_reason}</span>}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       ) : (
         <div className="h-20 flex items-center justify-center text-xs text-gray-600">
@@ -347,6 +374,7 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
           handleTrade={handleTrade}
           userRecord={userRecord}
           holding={holding}
+          currentPrice={player.current_price}
         />
       )}
 
@@ -376,6 +404,7 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
           handleTrade={handleTrade}
           userRecord={userRecord}
           holding={holding}
+          currentPrice={player.current_price}
         />
       ) : (
         <div className="text-center text-gray-500 text-sm py-4">
@@ -563,7 +592,15 @@ function HoldingSummary({ holding, player }) {
   )
 }
 
-function TradeSection({ tradeMode, setTradeMode, shares, setShares, totalCost, loading, message, handleTrade, userRecord, holding }) {
+function TradeSection({ tradeMode, setTradeMode, shares, setShares, totalCost, loading, message, handleTrade, userRecord, holding, currentPrice }) {
+  const qty = parseInt(shares, 10) || 0
+  const isSell = tradeMode === 'sell'
+  const avgBuy = holding?.avg_buy_price ?? 0
+  const costBasis = avgBuy * qty
+  const proceeds = currentPrice * qty
+  const pl = proceeds - costBasis
+  const plPct = costBasis > 0 ? (pl / costBasis) * 100 : 0
+
   return (
     <div className="space-y-3">
       <div className="flex rounded-lg overflow-hidden border border-[#1e2330]">
@@ -582,14 +619,32 @@ function TradeSection({ tradeMode, setTradeMode, shares, setShares, totalCost, l
       </div>
 
       <div className="flex gap-2">
-        <input
-          type="number"
-          min="1"
-          value={shares}
-          onChange={e => setShares(e.target.value)}
-          className="flex-1 bg-[#161a21] border border-[#1e2330] rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-gray-500"
-          placeholder="Shares"
-        />
+        <div className="flex-1 flex gap-2">
+          <input
+            type="number"
+            min="1"
+            max={isSell && holding?.shares > 0 ? holding.shares : undefined}
+            value={shares}
+            onChange={e => {
+              const val = parseInt(e.target.value, 10)
+              if (isSell && holding?.shares > 0 && val > holding.shares) {
+                setShares(holding.shares)
+              } else {
+                setShares(e.target.value)
+              }
+            }}
+            className="flex-1 bg-[#161a21] border border-[#1e2330] rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-gray-500"
+            placeholder="Shares"
+          />
+          {isSell && holding?.shares > 0 && (
+            <button
+              onClick={() => setShares(holding.shares)}
+              className="px-3 py-2 rounded-lg text-xs text-green-400 hover:text-green-300 font-medium bg-[#161a21] border border-[#1e2330] whitespace-nowrap"
+            >
+              Max
+            </button>
+          )}
+        </div>
         <button
           onClick={handleTrade}
           disabled={loading}
@@ -602,6 +657,25 @@ function TradeSection({ tradeMode, setTradeMode, shares, setShares, totalCost, l
           {loading ? '...' : tradeMode === 'buy' ? `Buy · £${totalCost.toFixed(2)}` : `Sell · £${totalCost.toFixed(2)}`}
         </button>
       </div>
+
+      {isSell && holding?.shares > 0 && qty > 0 && (
+        <div className="bg-[#161a21] border border-[#1e2330] rounded-lg px-4 py-3 space-y-1.5 text-xs">
+          <div className="flex justify-between text-gray-500">
+            <span>Bought at</span>
+            <span className="text-white">£{avgBuy.toFixed(2)} × {qty} = £{costBasis.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between text-gray-500">
+            <span>Selling at</span>
+            <span className="text-white">£{currentPrice.toFixed(2)} × {qty} = £{proceeds.toFixed(2)}</span>
+          </div>
+          <div className="border-t border-[#1e2330] pt-1.5 flex justify-between font-medium">
+            <span className="text-gray-500">{pl >= 0 ? 'Profit' : 'Loss'}</span>
+            <span className={pl >= 0 ? 'text-green-400' : 'text-red-400'}>
+              {pl >= 0 ? '+' : ''}£{Math.abs(pl).toFixed(2)} ({pl >= 0 ? '+' : ''}{plPct.toFixed(1)}%)
+            </span>
+          </div>
+        </div>
+      )}
 
       {message && (
         <div className={`text-sm rounded-lg px-3 py-2 ${message.type === 'success' ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>

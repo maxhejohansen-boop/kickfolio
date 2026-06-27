@@ -3,13 +3,14 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthContext'
 import PlayerModal from './PlayerModal'
 
-export default function PlayerCard({ player }) {
-  const [latestStats, setLatestStats] = useState(null)
+export default function PlayerCard({ player, latestStats: initialStats, appearances = 0 }) {
+  const [latestStats, setLatestStats] = useState(initialStats ?? null)
   const [showModal, setShowModal] = useState(false)
 
   useEffect(() => {
+    if (initialStats !== undefined) { setLatestStats(initialStats); return }
     fetchLatestStats()
-  }, [player.id])
+  }, [player.id, initialStats])
 
   async function fetchLatestStats() {
     const { data } = await supabase
@@ -61,7 +62,7 @@ export default function PlayerCard({ player }) {
             </div>
           </div>
           <span className={`text-xs font-medium px-2 py-0.5 rounded ${positionColors[player.position] ?? 'text-gray-400 bg-gray-400/10'}`}>
-            {player.position.slice(0, 3).toUpperCase()}
+            {player.position === 'Goalkeeper' ? 'GK' : player.position.slice(0, 3).toUpperCase()}
           </span>
         </div>
 
@@ -77,9 +78,13 @@ export default function PlayerCard({ player }) {
           </div>
         </div>
 
-        {latestStats && (
-          <div className="mt-3 pt-3 border-t border-[#1e2330] grid grid-cols-3 gap-1 text-center">
-            {player.position !== 'Goalkeeper' ? (
+        <div className="mt-3 pt-3 border-t border-[#1e2330] grid grid-cols-4 gap-1 text-center">
+          <div>
+            <div className="text-xs text-gray-500">Apps</div>
+            <div className="text-sm font-semibold text-white">{appearances}</div>
+          </div>
+          {latestStats ? (
+            player.position !== 'Goalkeeper' ? (
               <>
                 <div>
                   <div className="text-xs text-gray-500">Goals</div>
@@ -109,9 +114,11 @@ export default function PlayerCard({ player }) {
                   <div className="text-sm font-semibold text-white">{latestStats.rating}</div>
                 </div>
               </>
-            )}
-          </div>
-        )}
+            )
+          ) : (
+            <div className="col-span-3 flex items-center justify-center text-xs text-gray-600">No match data</div>
+          )}
+        </div>
       </div>
 
       {showModal && (

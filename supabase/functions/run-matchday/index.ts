@@ -10,6 +10,19 @@ const SEASON    = 2025
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
+const DNP_REASONS = [
+  'Injury',
+  'Illness',
+  'Fell out with manager',
+  'Rested to regain match sharpness',
+  'Suspension',
+  'Personal reasons',
+  'Fatigue',
+  'International duty conflict',
+  'Precautionary rest',
+  'Knock sustained in training',
+]
+
 interface PlayerStats {
   goals: number
   assists: number
@@ -18,6 +31,7 @@ interface PlayerStats {
   saves: number
   clean_sheet: boolean
   played: boolean
+  dnp_reason?: string
 }
 
 interface FixtureInfo {
@@ -31,7 +45,10 @@ interface FixtureInfo {
 
 function generateSimulatedStats(position: string): PlayerStats {
   const plays = Math.random() > 0.12
-  if (!plays) return { goals: 0, assists: 0, rating: 0, minutes: 0, saves: 0, clean_sheet: false, played: false }
+  if (!plays) {
+    const dnp_reason = DNP_REASONS[Math.floor(Math.random() * DNP_REASONS.length)]
+    return { goals: 0, assists: 0, rating: 0, minutes: 0, saves: 0, clean_sheet: false, played: false, dnp_reason }
+  }
 
   const minutes = Math.random() > 0.2 ? 90 : Math.floor(Math.random() * 55 + 30)
 
@@ -233,6 +250,7 @@ Deno.serve(async (req) => {
         rating: stats.played ? stats.rating : 0,
         minutes: stats.minutes, saves: stats.saves,
         clean_sheet: stats.clean_sheet, price_change_pct: changePct,
+        dnp_reason: stats.played ? null : (stats.dnp_reason ?? 'Unknown'),
       })
       priceUpdates.push({ id: player.id, current_price: newPrice })
       matchLog.push({
@@ -240,6 +258,7 @@ Deno.serve(async (req) => {
         played: stats.played, goals: stats.goals, assists: stats.assists,
         rating: stats.rating, saves: stats.saves, clean_sheet: stats.clean_sheet,
         changePct, oldPrice: player.current_price, newPrice,
+        dnpReason: stats.played ? null : (stats.dnp_reason ?? 'Unknown'),
       })
     }
 

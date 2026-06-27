@@ -94,7 +94,11 @@ export default function Portfolio() {
               </tr>
             </thead>
             <tbody>
-              {holdings.map((h) => {
+              {[...holdings].sort((a, b) => {
+                const plA = a.shares * a.players.current_price - a.shares * a.avg_buy_price
+                const plB = b.shares * b.players.current_price - b.shares * b.avg_buy_price
+                return plB - plA
+              }).map((h) => {
                 const currentVal = h.shares * h.players.current_price
                 const costBasis = h.shares * h.avg_buy_price
                 const pl = currentVal - costBasis
