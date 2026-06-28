@@ -4,11 +4,22 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthContext'
 import PlayerModal from '../components/PlayerModal'
 
+const TEAMS = [
+  { label: 'All',      club: 'All' },
+  { label: 'Arsenal',  club: 'Arsenal' },
+  { label: 'Chelsea',  club: 'Chelsea' },
+  { label: 'Liverpool',club: 'Liverpool' },
+  { label: 'Man City', club: 'Manchester City' },
+  { label: 'Man Utd',  club: 'Manchester United' },
+  { label: 'Spurs',    club: 'Tottenham' },
+]
+
 export default function Portfolio() {
   const { user, userRecord, refreshUserRecord } = useAuth()
   const [holdings, setHoldings] = useState([])
   const [loading, setLoading] = useState(true)
   const [selectedPlayer, setSelectedPlayer] = useState(null)
+  const [teamFilter, setTeamFilter] = useState('All')
 
   useEffect(() => {
     if (user) fetchHoldings()
@@ -80,6 +91,23 @@ export default function Portfolio() {
           </Link>
         </div>
       ) : (
+        <>
+          <div className="flex flex-wrap gap-2 mb-4 overflow-x-auto pb-1">
+            {TEAMS.map(({ label, club }) => (
+              <button
+                key={club}
+                onClick={() => setTeamFilter(club)}
+                className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
+                  teamFilter === club
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-[#111318] border border-[#1e2330] text-gray-400 hover:text-white'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
         <div className="bg-[#111318] border border-[#1e2330] rounded-xl overflow-hidden">
           <table className="w-full">
             <thead>
@@ -94,7 +122,9 @@ export default function Portfolio() {
               </tr>
             </thead>
             <tbody>
-              {[...holdings].sort((a, b) => {
+              {[...holdings]
+              .filter(h => teamFilter === 'All' || h.players.club === teamFilter)
+              .sort((a, b) => {
                 const plA = a.shares * a.players.current_price - a.shares * a.avg_buy_price
                 const plB = b.shares * b.players.current_price - b.shares * b.avg_buy_price
                 return plB - plA
@@ -140,6 +170,7 @@ export default function Portfolio() {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       {selectedPlayer && (

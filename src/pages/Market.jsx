@@ -4,6 +4,16 @@ import PlayerCard from '../components/PlayerCard'
 
 const POSITIONS = ['All', 'Forward', 'Midfielder', 'Defender', 'Goalkeeper']
 
+const TEAMS = [
+  { label: 'All',      club: 'All' },
+  { label: 'Arsenal',  club: 'Arsenal' },
+  { label: 'Chelsea',  club: 'Chelsea' },
+  { label: 'Liverpool',club: 'Liverpool' },
+  { label: 'Man City', club: 'Manchester City' },
+  { label: 'Man Utd',  club: 'Manchester United' },
+  { label: 'Spurs',    club: 'Tottenham' },
+]
+
 const SORT_OPTIONS = [
   { label: 'Price',   key: 'current_price' },
   { label: 'Change',  key: 'changePct' },
@@ -19,9 +29,10 @@ export default function Market() {
   const [appsMap, setAppsMap] = useState({})
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('All')
+  const [teamFilter, setTeamFilter] = useState('All')
   const [search, setSearch] = useState('')
   const [matchday, setMatchday] = useState(0)
-  const [sortKey, setSortKey] = useState('current_price')
+  const [sortKey, setSortKey] = useState('changePct')
   const [sortDir, setSortDir] = useState(-1)
 
   useEffect(() => {
@@ -66,9 +77,10 @@ export default function Market() {
 
   const filtered = players
     .filter(p => {
-      const matchPos = filter === 'All' || p.position === filter
+      const matchPos  = filter === 'All' || p.position === filter
+      const matchTeam = teamFilter === 'All' || p.club === teamFilter
       const matchSearch = p.name.toLowerCase().includes(search.toLowerCase()) || p.club.toLowerCase().includes(search.toLowerCase())
-      return matchPos && matchSearch
+      return matchPos && matchTeam && matchSearch
     })
     .map(p => {
       const s = statsMap[p.id] ?? null
@@ -100,7 +112,7 @@ export default function Market() {
         />
       </div>
 
-      <div className="flex flex-wrap gap-2 mb-4 overflow-x-auto pb-1">
+      <div className="flex flex-wrap gap-2 mb-3 overflow-x-auto pb-1">
         {POSITIONS.map(pos => (
           <button
             key={pos}
@@ -112,6 +124,22 @@ export default function Market() {
             }`}
           >
             {pos}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap gap-2 mb-4 overflow-x-auto pb-1">
+        {TEAMS.map(({ label, club }) => (
+          <button
+            key={club}
+            onClick={() => setTeamFilter(club)}
+            className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
+              teamFilter === club
+                ? 'bg-blue-500 text-white'
+                : 'bg-[#111318] border border-[#1e2330] text-gray-400 hover:text-white'
+            }`}
+          >
+            {label}
           </button>
         ))}
       </div>
