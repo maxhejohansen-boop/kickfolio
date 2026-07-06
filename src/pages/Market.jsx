@@ -15,11 +15,12 @@ const SORT_OPTIONS = [
 ]
 
 const GRADE_CHIPS = [
-  { value: 'All', label: 'All Grades',  active: 'bg-[#1e2330] text-white border border-gray-600' },
-  { value: 'A',   label: 'Strong Buy',  active: 'bg-green-500 text-black' },
-  { value: 'B',   label: 'Buy',         active: 'bg-green-500/20 text-green-400 border border-green-500/30' },
-  { value: 'C',   label: 'Fair Value',  active: 'bg-[#1e2330] text-gray-200 border border-gray-500' },
-  { value: 'D',   label: 'Overvalued',  active: 'bg-red-500/10 text-red-400 border border-red-500/20' },
+  { value: 'All',       label: 'All',        active: 'bg-[#1e2330] text-white border border-gray-600' },
+  { value: 'Unscouted', label: 'Unscouted',  active: 'bg-[#1e2330] text-gray-300 border border-gray-500' },
+  { value: 'A',         label: 'Strong Buy', active: 'bg-green-500 text-black' },
+  { value: 'B',         label: 'Buy',        active: 'bg-green-500/20 text-green-400 border border-green-500/30' },
+  { value: 'C',         label: 'Fair Value', active: 'bg-[#1e2330] text-gray-200 border border-gray-500' },
+  { value: 'D',         label: 'Overvalued', active: 'bg-red-500/10 text-red-400 border border-red-500/20' },
 ]
 
 export default function Market() {
@@ -122,22 +123,36 @@ export default function Market() {
 
   const balance = userRecord?.balance ?? 0
 
-  // Compute grade per player (derived, not stored in state)
+  // A player's scout is revealed only when instant-scouted, or sent-scouts has matured
+  function isScoutRevealed(playerId) {
+    const s = scoutsMap[playerId]
+    if (!s) return false
+    if (s.scout_type === 'instant') return true
+    return s.scout_type === 'sent' && s.reveals_at_matchday != null && s.reveals_at_matchday <= matchday
+  }
+
+  // Only compute grades for scouted players — unscouted players have no grade
   const gradeMap = {}
   for (const p of players) {
+    if (!isScoutRevealed(p.id)) continue
     const g = calcGrade(p, last5Map[p.id], historyMap[p.id], balance)
     if (g) gradeMap[p.id] = g
   }
 
-  // Count per grade across all players for chip badges
-  const gradeCounts = { A: 0, B: 0, C: 0, D: 0 }
-  for (const g of Object.values(gradeMap)) gradeCounts[g.grade]++
+  const gradeCounts = { A: 0, B: 0, C: 0, D: 0, Unscouted: 0 }
+  for (const p of players) {
+    if (!isScoutRevealed(p.id)) gradeCounts.Unscouted++
+    else if (gradeMap[p.id]) gradeCounts[gradeMap[p.id].grade]++
+  }
 
   const filtered = players
     .filter(p => {
       const matchPos    = filter === 'All' || p.position === filter
       const matchSearch = p.name.toLowerCase().includes(search.toLowerCase()) || p.club.toLowerCase().includes(search.toLowerCase())
-      const matchGrade  = gradeFilter === 'All' || gradeMap[p.id]?.grade === gradeFilter
+      const scouted     = isScoutRevealed(p.id)
+      const matchGrade  = gradeFilter === 'All'
+        || (gradeFilter === 'Unscouted' && !scouted)
+        || (gradeFilter !== 'Unscouted' && scouted && gradeMap[p.id]?.grade === gradeFilter)
       return matchPos && matchSearch && matchGrade
     })
     .map(p => {
@@ -173,21 +188,26 @@ export default function Market() {
       <div data-tutorial="market-filters" className="flex items-center gap-3 mb-6">
         {/* Scrollable chips */}
         <div className="flex items-center gap-2 overflow-x-auto flex-1 min-w-0 pb-0.5">
-          {/* Grade filter */}
-          {Object.keys(gradeMap).length > 0 && GRADE_CHIPS.map(({ value, label, active }) => (
-            <button
-              key={value}
-              onClick={() => setGradeFilter(value)}
-              className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
-                gradeFilter === value
-                  ? active
-                  : 'bg-[#111318] border border-[#1e2330] text-gray-400 hover:text-white'
-              }`}
-            >
-              {label}{value !== 'All' && gradeCounts[value] > 0 ? ` (${gradeCounts[value]})` : ''}
-            </button>
-          ))}
-          {Object.keys(gradeMap).length > 0 && <span className="w-px h-4 bg-[#1e2330] shrink-0 mx-1" />}
+          {/* Grade filter — always visible once user is logged in */}
+          {user && GRADE_CHIPS.map(({ value, label, active }) => {
+            const count = value === 'All' ? null : gradeCounts[value] ?? 0
+            // hide A/B/C/D chips if no players scouted yet
+            if (['A','B','C','D'].includes(value) && Object.keys(gradeMap).length === 0) return null
+            return (
+              <button
+                key={value}
+                onClick={() => setGradeFilter(value)}
+                className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
+                  gradeFilter === value
+                    ? active
+                    : 'bg-[#111318] border border-[#1e2330] text-gray-400 hover:text-white'
+                }`}
+              >
+                {label}{count != null && count > 0 ? ` (${count})` : ''}
+              </button>
+            )
+          })}
+          {user && <span className="w-px h-4 bg-[#1e2330] shrink-0 mx-1" />}
 
           {/* Position filter */}
           {POSITIONS.map(pos => (

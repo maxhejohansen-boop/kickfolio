@@ -323,9 +323,14 @@ export default function Live() {
   // ─── Status — flip to completed client-side the moment the clock hits 0 ───
   const dbStatus  = matchdayStatus?.status
   const endsAt    = matchdayStatus?.ends_at ? new Date(matchdayStatus.ends_at) : null
+  const startedAt = matchdayStatus?.started_at ? new Date(matchdayStatus.started_at) : null
   const remainingMs = dbStatus === 'live' && endsAt ? Math.max(0, endsAt - Date.now()) : 0
   const isLive      = dbStatus === 'live' && remainingMs > 0
   const isCompleted = dbStatus === 'completed' || (dbStatus === 'live' && endsAt != null && remainingMs === 0)
+
+  // Scale real 300s window → 90 match minutes
+  const elapsedSecs  = isLive && startedAt ? Math.max(0, (Date.now() - startedAt.getTime()) / 1000) : 0
+  const matchMinute  = Math.min(90, Math.floor(elapsedSecs * 90 / 300))
 
   // ─── Sorting ────────────────────────────────────────────────
   const sorted = isLive
@@ -375,7 +380,11 @@ export default function Live() {
                 {!isLive && !isCompleted && <span className="text-gray-500 ml-2">· Not live yet</span>}
               </h1>
               {isLive && (
-                <p className="text-xs text-red-400/70">{fmt(remainingMs)} remaining</p>
+                <p className="text-xs text-red-400/70 flex items-center gap-2">
+                  <span className="font-bold text-red-400 tabular-nums">{matchMinute}'</span>
+                  <span className="text-red-400/40">·</span>
+                  <span>{fmt(remainingMs)} remaining</span>
+                </p>
               )}
             </div>
           </div>

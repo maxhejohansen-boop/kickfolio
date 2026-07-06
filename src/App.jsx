@@ -11,6 +11,8 @@ import Portfolio from './pages/Portfolio'
 import Leaderboard from './pages/Leaderboard'
 import Admin from './pages/Admin'
 import Live from './pages/Live'
+import Scouting from './pages/Scouting'
+import Inbox from './pages/Inbox'
 import ErrorBoundary from './components/ErrorBoundary'
 
 function ProtectedRoute({ children }) {
@@ -55,11 +57,11 @@ function AppRoutes() {
   const { user, loading } = useAuth()
   const location = useLocation()
 
-  // Root: show Landing for logged-out, redirect logged-in to market
+  // Root: show Landing for logged-out, redirect logged-in to inbox
   if (location.pathname === '/') {
     if (loading) return <div className="min-h-screen bg-[#0a0b0e]" />
     if (!user) return <Landing />
-    return <Navigate to="/market" replace />
+    return <Navigate to="/inbox" replace />
   }
 
   return (
@@ -75,6 +77,8 @@ function AppRoutes() {
           <Route path="/leaderboard" element={<Leaderboard />} />
           <Route path="/admin"    element={<Admin />} />
           <Route path="/live"     element={<Live />} />
+          <Route path="/scouting" element={<ProtectedRoute><Scouting /></ProtectedRoute>} />
+          <Route path="/inbox"    element={<ProtectedRoute><Inbox /></ProtectedRoute>} />
           <Route path="*"         element={<Navigate to="/" replace />} />
         </Routes>
       </div>

@@ -222,7 +222,9 @@ function generateTeamMatchStats(
         + a * (ASSIST_BONUS[p.position] ?? 0.6)
         + (cs ? 0.5 : 0)
 
-    const rating = parseFloat(Math.min(10, Math.max(4.5, base + bonuses)).toFixed(1))
+    const floor = p.position === 'Goalkeeper' ? 4.5
+      : g >= 3 ? 9.2 : g >= 2 ? 8.2 : g >= 1 ? 7.0 : a >= 1 ? 6.8 : 4.5
+    const rating = parseFloat(Math.min(10, Math.max(floor, base + bonuses)).toFixed(1))
     result.set(p.id, { goals: g, assists: a, rating, minutes: p.minutes, saves: s, clean_sheet: cs, played: true })
   }
   return { stats: result, events }
@@ -531,6 +533,170 @@ Deno.serve(async (req) => {
         }
       }
     }
+
+    // ── 7. Scouting focuses ─────────────────────────────────────────────────
+    const { data: activeFocuses } = await supabase.from('scouting_focuses').select('*').eq('active', true)
+    if (activeFocuses?.length) {
+      const userFocusMap = new Map<string, any[]>()
+      for (const f of activeFocuses) {
+        if (!userFocusMap.has(f.user_id)) userFocusMap.set(f.user_id, [])
+        userFocusMap.get(f.user_id)!.push(f)
+      }
+
+      for (const [userId, userFocuses] of userFocusMap) {
+        const { data: allScouts }  = await supabase.from('player_scouts').select('player_id, scout_type, reveals_at_matchday').eq('user_id', userId)
+        const { data: uRow }       = await supabase.from('users').select('balance, max_scouts').eq('id', userId).single()
+        const maxScouts = (uRow as any)?.max_scouts ?? 3
+        const pendingCount = (allScouts ?? []).filter((s: any) => s.scout_type === 'sent' && s.reveals_at_matchday != null && s.reveals_at_matchday > matchday).length
+        const availableSlots = Math.max(0, maxScouts - pendingCount)
+        if (availableSlots === 0) continue
+
+        const scoutedSet = new Set((allScouts ?? []).map((s: any) => s.player_id))
+        const totalCost = userFocuses.reduce((s, f) => s + Number(f.cost_per_matchday), 0)
+        const newScouts: any[] = []
+
+        for (const focus of userFocuses) {
+          for (const p of (players as any[])) {
+            if (newScouts.length >= availableSlots) break
+            if (scoutedSet.has(p.id)) continue
+            if (focus.position && p.position !== focus.position) continue
+            if (focus.club     && p.club     !== focus.club)     continue
+            if (focus.max_price != null && Number(p.current_price) > Number(focus.max_price)) continue
+            if (focus.min_price != null && Number(p.current_price) < Number(focus.min_price)) continue
+            if (newScouts.find(s => s.player_id === p.id)) continue
+            scoutedSet.add(p.id)
+            newScouts.push({ user_id: userId, player_id: p.id, scout_type: 'sent', reveals_at_matchday: matchday + 1 })
+          }
+          if (newScouts.length >= availableSlots) break
+        }
+
+        if (newScouts.length) {
+          await supabase.from('player_scouts').upsert(newScouts, { onConflict: 'user_id,player_id', ignoreDuplicates: true })
+        }
+        if (uRow) await supabase.from('users').update({ balance: Math.max(0, (uRow as any).balance - totalCost) }).eq('id', userId)
+      }
+    }
+
+    // ── 8. Inbox messages ────────────────────────────────────────────────────────
+    const { data: allUsers } = await supabase.from('users').select('id, balance')
+    const playerMap = new Map((players as any[]).map((p: any) => [p.id, p]))
+    const inboxMessages: any[] = []
+
+    // News: top performers (sent to all users)
+    const topStats = [...statsInserts]
+      .filter((s: any) => s.minutes > 0 && (s.goals >= 1 || s.rating >= 8.0))
+      .sort((a: any, b: any) => (b.goals * 3 + b.assists + b.rating) - (a.goals * 3 + a.assists + a.rating))
+      .slice(0, 3)
+
+    for (const stat of topStats) {
+      const p = playerMap.get(stat.player_id)
+      if (!p) continue
+      const g = stat.goals ?? 0
+      const a = stat.assists ?? 0
+      const r = Number(stat.rating ?? 0)
+      let subject = '', body = ''
+      if (g >= 3) {
+        subject = `Hat-trick hero: ${p.name} bags three for ${p.club}`
+        body = `Dear Manager,\n\n${p.name} delivered an unforgettable performance for ${p.club} in Matchday ${matchday}, scoring a sensational hat-trick.\n\nMATCHDAY ${matchday} STATS\n  Goals:   ${g}\n  Assists: ${a}\n  Rating:  ${r.toFixed(1)}/10\n\nMarket analysts are already tipping ${p.name} shares as a strong buy. Their price has moved accordingly — those holding shares will have seen significant gains today.\n\n"The goals will come when you work hard," said ${p.name.split(' ')[0]}. "I'm just focused on helping the team."\n\n— Sports Desk, Kickfolio`
+      } else if (g === 2) {
+        subject = `Brace: ${p.name} doubles up in MD${matchday}`
+        body = `Dear Manager,\n\n${p.name} was the standout performer on Matchday ${matchday}, registering a brace for ${p.club}.\n\nMATCHDAY ${matchday} STATS\n  Goals:   ${g}\n  Assists: ${a}\n  Rating:  ${r.toFixed(1)}/10\n\nShare prices reacted immediately. Investors who spotted ${p.name}'s potential early continue to reap the rewards.\n\n— Sports Desk, Kickfolio`
+      } else if (g === 1) {
+        subject = `${p.name} on target as ${p.club} impress`
+        body = `Dear Manager,\n\nMATCHDAY ${matchday} REPORT\n\n${p.name} continued their impressive form, finding the net for ${p.club}.\n\n  Goals:   ${g}\n  Assists: ${a}\n  Rating:  ${r.toFixed(1)}/10\n\nConsistent output like this is what long-term investors look for.\n\n— Sports Desk, Kickfolio`
+      } else {
+        subject = `${p.name} stars for ${p.club} despite blank`
+        body = `Dear Manager,\n\nYou don't need to score to dominate. ${p.name} delivered a superb ${r.toFixed(1)}/10 display for ${p.club} in Matchday ${matchday} — one of the highest ratings of the round.\n\n  Goals:   0\n  Assists: ${a}\n  Rating:  ${r.toFixed(1)}/10\n\nThis kind of performance drives share prices just as effectively as goals. Investors are taking note.\n\n— Sports Desk, Kickfolio`
+      }
+      const preview = `${p.name} rated ${r.toFixed(1)} — ${g}G ${a}A in Matchday ${matchday}`
+      for (const u of (allUsers ?? [])) {
+        inboxMessages.push({ user_id: u.id, type: 'news', sender: 'Sports Desk', subject, preview, body, metadata: { player_id: stat.player_id, matchday } })
+      }
+    }
+
+    // Insider tips (random, ~60% accurate, sent to all users)
+    const tipPool = [...statsInserts].filter((s: any) => s.minutes > 0).sort(() => Math.random() - 0.5).slice(0, 3)
+    const tipSenders = ['Deep Throat', 'Anonymous', 'A Friend', 'Reliable Source']
+    for (const stat of tipPool.slice(0, 2)) {
+      const p = playerMap.get(stat.player_id)
+      if (!p) continue
+      const isAccurate = Math.random() > 0.4
+      const sender = tipSenders[Math.floor(Math.random() * tipSenders.length)]
+      const positiveHints = [
+        `Word from inside ${p.club}'s training ground: ${p.name} has been absolutely electric in sessions this week. Sources close to the camp suggest the coaching staff are particularly happy with their sharpness. Could be one to watch.`,
+        `A contact with access to ${p.club} tells me ${p.name} has been putting in extra hours. When this player is motivated like this, performances tend to follow. Take it as you will.`,
+        `Hearing very interesting things about ${p.name}. My source says they looked sharp, focused, and hungry. Might be worth taking a position before next matchday.`,
+      ]
+      const negativeHints = [
+        `${p.name} reportedly nursing a knock. The club are staying quiet but our source suggests they might not be at full fitness. Consider your exposure carefully.`,
+        `Word is ${p.name} has dropped down the pecking order at ${p.club}. A new setup might limit their opportunities. Not confirmed — worth monitoring.`,
+        `Off-field distractions for ${p.name} this week. Nothing confirmed from the club, but our contact suggests things aren't fully settled.`,
+      ]
+      const hints = isAccurate ? positiveHints : negativeHints
+      const tipBody = hints[Math.floor(Math.random() * hints.length)]
+      for (const u of (allUsers ?? [])) {
+        inboxMessages.push({
+          user_id: u.id, type: 'tip', sender,
+          subject: `Re: ${p.name} — matchday ${matchday + 1}`,
+          preview: tipBody.slice(0, 100) + '...',
+          body: tipBody + '\n\n— [Identity withheld]\n\nDelete this message after reading.',
+          metadata: { player_id: stat.player_id, accurate: isAccurate },
+        })
+      }
+    }
+
+    // Scout reports: scouts revealing this matchday
+    const { data: revealingScouts } = await supabase
+      .from('player_scouts').select('user_id, player_id').eq('scout_type', 'sent').eq('reveals_at_matchday', matchday)
+    for (const scout of (revealingScouts ?? [])) {
+      const p = playerMap.get(scout.player_id)
+      if (!p) continue
+      const stat = statsInserts.find((s: any) => s.player_id === scout.player_id)
+      const g = stat?.goals ?? 0
+      const a = stat?.assists ?? 0
+      const r = Number(stat?.rating ?? 0)
+      const price = Number(p.current_price ?? 0)
+      const gradeLabel = price < 3 ? 'Strong Buy' : price < 6 ? 'Buy' : price < 10 ? 'Hold' : 'Overvalued'
+      const gradeRec = price < 3
+        ? 'Our scouts believe this player is significantly undervalued. We strongly recommend acquiring shares before the market catches on.'
+        : price < 6
+        ? 'A solid acquisition at current prices. Consistent output and good value.'
+        : price < 10
+        ? 'Trading close to fair value. Buy only if you have conviction in their future output.'
+        : 'Currently at a premium. Exercise caution unless you expect exceptional upcoming performance.'
+      const body = `Dear Manager,\n\nOur scouting team has completed their assessment of ${p.name}, ${p.position} at ${p.club}.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nSCOUT REPORT — MATCHDAY ${matchday}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nPLAYER:   ${p.name}\nPOSITION: ${p.position}\nCLUB:     ${p.club}\n\nMATCHDAY PERFORMANCE\n  Goals:   ${g}\n  Assists: ${a}\n  Rating:  ${r > 0 ? r.toFixed(1) + '/10' : 'Did not play'}\n\nOVERALL ASSESSMENT: ${gradeLabel}\nCurrent Price: £${price.toFixed(2)}\n\nRECOMMENDATION\n${gradeRec}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nBest regards,\nHead of Scouting\nKickfolio`
+      inboxMessages.push({
+        user_id: scout.user_id, type: 'scout_report', sender: 'Head Scout',
+        subject: `Scout Report: ${p.name} (${p.club})`,
+        preview: `${p.name} (${p.position}, ${p.club}) — ${gradeLabel} at £${price.toFixed(2)}`,
+        body, metadata: { player_id: scout.player_id, matchday },
+      })
+    }
+
+    // Bills: one per user with active focuses
+    if (activeFocuses?.length) {
+      const userFocusBillMap = new Map<string, any[]>()
+      for (const f of activeFocuses) {
+        if (!userFocusBillMap.has(f.user_id)) userFocusBillMap.set(f.user_id, [])
+        userFocusBillMap.get(f.user_id)!.push(f)
+      }
+      for (const [userId, focuses] of userFocusBillMap) {
+        const totalCost = focuses.reduce((s: number, f: any) => s + Number(f.cost_per_matchday), 0)
+        if (totalCost <= 0) continue
+        const uRow = (allUsers ?? []).find((u: any) => u.id === userId)
+        const balance = uRow ? Number((uRow as any).balance) : 0
+        const focusLines = focuses.map((f: any) => `  • ${f.name} — £${Number(f.cost_per_matchday).toFixed(2)}/MD`).join('\n')
+        const body = `Dear Manager,\n\nPlease find your scouting invoice for Matchday ${matchday}.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nACTIVE FOCUS FEES\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n${focusLines}\n\nTOTAL DEDUCTED: £${totalCost.toFixed(2)}\nREMAINING BALANCE: £${balance.toFixed(2)}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nThank you for using Kickfolio's scouting network.\n\nRegards,\nFinance Department\nKickfolio HQ`
+        inboxMessages.push({
+          user_id: userId, type: 'bill', sender: 'Finance Department',
+          subject: `Scout Bill — Matchday ${matchday}`,
+          preview: `£${totalCost.toFixed(2)} deducted for ${focuses.length} active focus(es) on MD${matchday}`,
+          body, metadata: { matchday, totalCost, focusCount: focuses.length },
+        })
+      }
+    }
+
+    if (inboxMessages.length) await supabase.from('inbox_messages').insert(inboxMessages)
 
     return json({ success: true, matchday, simulate, simFixtures, apiFixtures: fixtureCount, log: matchLog })
 

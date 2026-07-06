@@ -12,6 +12,44 @@ export default function Navbar() {
   const location = useLocation()
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef(null)
+  const [portfolioValue, setPortfolioValue] = useState(0)
+  const [unreadCount, setUnreadCount] = useState(0)
+
+  useEffect(() => {
+    if (!user) { setPortfolioValue(0); return }
+    supabase
+      .from('portfolios')
+      .select('shares, players(current_price)')
+      .eq('user_id', user.id)
+      .gt('shares', 0)
+      .then(({ data }) => {
+        const val = (data ?? []).reduce((s, h) => s + h.shares * Number(h.players.current_price), 0)
+        setPortfolioValue(val)
+      })
+  }, [user?.id, userRecord?.balance])
+
+  useEffect(() => {
+    if (!user) { setUnreadCount(0); return }
+    supabase
+      .from('inbox_messages')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', user.id)
+      .eq('read', false)
+      .then(({ count }) => setUnreadCount(count ?? 0))
+
+    const ch = supabase.channel('navbar-inbox')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'inbox_messages', filter: `user_id=eq.${user.id}` },
+        () => {
+          supabase
+            .from('inbox_messages')
+            .select('id', { count: 'exact', head: true })
+            .eq('user_id', user.id)
+            .eq('read', false)
+            .then(({ count }) => setUnreadCount(count ?? 0))
+        })
+      .subscribe()
+    return () => { supabase.removeChannel(ch) }
+  }, [user?.id])
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -29,42 +67,49 @@ export default function Navbar() {
     navigate('/login')
   }
 
-  const navLink = (to, label) => (
+  const navLink = (to, label, badge) => (
     <Link
       to={to}
-      className={`text-sm font-medium transition-colors ${
+      className={`relative text-sm font-medium transition-colors ${
         location.pathname === to ? 'text-white' : 'text-gray-400 hover:text-white'
       }`}
     >
       {label}
+      {badge > 0 && (
+        <span className="absolute -top-2 -right-3 bg-blue-500 text-white text-[9px] font-bold rounded-full min-w-[16px] h-4 flex items-center justify-center px-1 leading-none">
+          {badge > 99 ? '99+' : badge}
+        </span>
+      )}
     </Link>
   )
 
   return (
     <nav className="border-b border-[#1e2330] bg-[#111318] sticky top-0 z-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="relative flex items-center justify-between h-14">
-          <div className="flex items-center gap-8">
-            <Link to="/" className="flex items-center gap-2">
+        <div className="flex items-center justify-between h-14 gap-4">
+          <div className="flex items-center gap-8 min-w-0">
+            <Link to="/" className="flex items-center gap-2 flex-shrink-0">
               <span className="text-green-400 text-xl">⚽</span>
               <span className="font-bold text-white text-lg tracking-tight">Kickfolio</span>
             </Link>
             {user && (
               <div className="hidden sm:flex items-center gap-6">
+                {navLink('/inbox', 'Inbox', unreadCount)}
                 {navLink('/market', 'Market')}
                 {navLink('/portfolio', 'Portfolio')}
+                {navLink('/scouting', 'Scouting')}
                 {navLink('/leaderboard', 'Leaderboard')}
                 {navLink('/admin', 'Simulate')}
               </div>
             )}
           </div>
 
-          {/* Countdown — always visible, pinned to center of navbar */}
-          <div className="absolute left-1/2 -translate-x-1/2 hidden sm:block">
+          {/* Pill — flex item between nav links and wallet, never overlaps */}
+          <div className="hidden sm:block flex-shrink-0">
             <MatchdayPill channelId="matchday-pill-center" />
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-shrink-0">
             {user ? (
               <div ref={menuRef} className="relative">
                 {/* Balance / user area — click to open menu */}
@@ -73,14 +118,14 @@ export default function Navbar() {
                   onClick={() => setMenuOpen(m => !m)}
                   className="hidden sm:flex flex-col items-end text-right cursor-pointer group"
                 >
-                  <span className="text-xs text-gray-500 truncate max-w-[160px] group-hover:text-gray-300 transition-colors">
-                    {user.email}
-                  </span>
-                  <span className="text-xs font-semibold text-green-400 group-hover:text-green-300 transition-colors flex items-center gap-1">
-                    £{userRecord?.balance?.toLocaleString('en-GB', { minimumFractionDigits: 2 }) ?? '—'}
+                  <span className="text-xs text-gray-500 group-hover:text-gray-300 transition-colors flex items-center gap-1">
+                    Wallet
                     <svg className={`w-3 h-3 text-gray-500 transition-transform ${menuOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
                     </svg>
+                  </span>
+                  <span className="text-sm font-bold text-white group-hover:text-green-300 transition-colors tabular-nums">
+                    £{userRecord ? ((userRecord.balance ?? 0) + portfolioValue).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
                   </span>
                 </button>
 
@@ -96,9 +141,14 @@ export default function Navbar() {
                 {menuOpen && (
                   <div className="absolute right-0 top-full mt-2 w-52 bg-[#111318] border border-[#1e2330] rounded-xl shadow-xl py-1 z-[200]">
                     <div className="px-4 py-2.5 border-b border-[#1e2330]">
-                      <div className="text-xs text-gray-500 truncate">{user.email}</div>
-                      <div className="text-sm font-semibold text-green-400 mt-0.5">
-                        £{userRecord?.balance?.toLocaleString('en-GB', { minimumFractionDigits: 2 }) ?? '—'}
+                      <div className="text-xs text-gray-500 truncate mb-1.5">{user.email}</div>
+                      <div className="text-sm font-bold text-white">
+                        £{userRecord ? ((userRecord.balance ?? 0) + portfolioValue).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
+                      </div>
+                      <div className="text-xs text-gray-600 mt-0.5 flex gap-2">
+                        <span>£{(userRecord?.balance ?? 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} cash</span>
+                        <span>·</span>
+                        <span>£{portfolioValue.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} portfolio</span>
                       </div>
                     </div>
                     <button
@@ -137,6 +187,7 @@ export default function Navbar() {
         {user && (
           <div className="sm:hidden flex items-center justify-between pb-2">
             <div className="flex gap-4">
+              {navLink('/inbox', 'Inbox', unreadCount)}
               {navLink('/market', 'Market')}
               {navLink('/portfolio', 'Portfolio')}
               {navLink('/leaderboard', 'Leaderboard')}

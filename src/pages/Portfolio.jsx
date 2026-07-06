@@ -58,7 +58,6 @@ export default function Portfolio() {
   )
   const totalPL = currentValue - totalInvested
   const totalPLPct = totalInvested > 0 ? (totalPL / totalInvested) * 100 : 0
-  const availableCash = userRecord?.balance ?? 0
 
   if (!user) {
     return (
@@ -74,22 +73,21 @@ export default function Portfolio() {
     <div data-tutorial="portfolio-table" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
       <h1 className="text-2xl font-bold text-white mb-6">Portfolio</h1>
 
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
-        <StatCard label="Total Invested" value={`£${totalInvested.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />
-        <StatCard label="Current Value" value={`£${currentValue.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <StatCard label="Portfolio value" value={`£${currentValue.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />
+        <StatCard label="Amount invested" value={`£${totalInvested.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />
         <StatCard
-          label="Total P&L"
+          label="Portfolio P&L"
           value={`${totalPL >= 0 ? '+' : ''}£${totalPL.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
           sub={`${totalPLPct >= 0 ? '+' : ''}${totalPLPct.toFixed(2)}%`}
           color={totalPL >= 0 ? 'text-green-400' : 'text-red-400'}
         />
         <StatCard
-          label="Dividends"
+          label="Dividends earned"
           value={`£${totalDividends.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
           sub="all time"
           color="text-amber-400"
         />
-        <StatCard label="Available Cash" value={`£${availableCash.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />
       </div>
 
       {recentDividends.length > 0 && (

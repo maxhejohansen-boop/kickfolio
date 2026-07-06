@@ -6,6 +6,7 @@ import { useTutorial } from '../lib/TutorialContext'
 import { GRADE_META, STAKE_PCT } from '../lib/gradeCalc'
 
 const SCOUT_COST = 500
+const SEND_SCOUT_COST = 150
 
 export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'buy', showActionsTab = false, gradeData = null, isLive = false, liveChangePct = null, liveMatchStats = null, onScoutUpdate }) {
   const { user, userRecord, refreshUserRecord } = useAuth()
@@ -23,6 +24,7 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
   const [scoutLoading, setScoutLoading] = useState(false)
   const [scoutMessage, setScoutMessage] = useState(null)
   const [currentMatchday, setCurrentMatchday] = useState(0)
+  const [occupiedScouts, setOccupiedScouts] = useState(0)
 
   // Limit order state
   const [limitOrders, setLimitOrders] = useState([])
@@ -38,8 +40,32 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
     return () => { document.body.style.overflow = '' }
   }, [player.id])
 
+  // During live matchday, subscribe to this player's stats being inserted/updated
+  useEffect(() => {
+    if (!isLive) return
+    const ch = supabase
+      .channel(`modal-stats-${player.id}`)
+      .on('postgres_changes', {
+        event: 'INSERT', schema: 'public', table: 'matchday_stats',
+        filter: `player_id=eq.${player.id}`,
+      }, ({ new: row }) => {
+        setAllStats(prev => {
+          if (prev.some(s => s.matchday === row.matchday)) return prev
+          return [row, ...prev]
+        })
+      })
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'matchday_stats',
+        filter: `player_id=eq.${player.id}`,
+      }, ({ new: row }) => {
+        setAllStats(prev => prev.map(s => s.matchday === row.matchday ? row : s))
+      })
+      .subscribe()
+    return () => { supabase.removeChannel(ch) }
+  }, [player.id, isLive])
+
   async function fetchData() {
-    const [historyRes, holdingRes, statsRes, limitRes, scoutRes, mdRes] = await Promise.all([
+    const [historyRes, holdingRes, statsRes, limitRes, scoutRes, mdRes, pendingScoutsRes] = await Promise.all([
       supabase
         .from('price_history')
         .select('price, matchday')
@@ -71,6 +97,9 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
         ? supabase.from('player_scouts').select('*').eq('user_id', user.id).eq('player_id', player.id).maybeSingle()
         : Promise.resolve({ data: null }),
       supabase.from('matchday_tracker').select('current_matchday').eq('id', 1).maybeSingle(),
+      user
+        ? supabase.from('player_scouts').select('player_id').eq('user_id', user.id).eq('scout_type', 'sent')
+        : Promise.resolve({ data: [] }),
     ])
 
     const priceMap = Object.fromEntries(
@@ -81,6 +110,7 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
     setLimitOrders(limitRes.data ?? [])
     setScoutInfo(scoutRes.data)
     setCurrentMatchday(mdRes.data?.current_matchday ?? 0)
+    setOccupiedScouts((pendingScoutsRes.data ?? []).length)
 
     const stats = statsRes.data ?? []
     setAllStats(stats)
@@ -229,10 +259,18 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
     (scoutInfo?.scout_type === 'sent' && scoutInfo.reveals_at_matchday != null && scoutInfo.reveals_at_matchday <= currentMatchday)
   const scoutPending = scoutInfo?.scout_type === 'sent' && !scoutRevealed
 
+  const maxScouts = userRecord?.max_scouts ?? 3
+  const availableScouts = Math.max(0, maxScouts - occupiedScouts)
+  const scoutsFull = availableScouts === 0
+
   async function handleScoutNow() {
     if (!user || !userRecord) return
     if (userRecord.balance < SCOUT_COST) {
       setScoutMessage({ type: 'error', text: `Need £${SCOUT_COST} to scout instantly.` })
+      return
+    }
+    if (scoutsFull) {
+      setScoutMessage({ type: 'error', text: `All ${maxScouts} scouts are busy. Wait for one to return.` })
       return
     }
     setScoutLoading(true); setScoutMessage(null)
@@ -254,16 +292,27 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
   }
 
   async function handleSendScouts() {
-    if (!user) return
+    if (!user || !userRecord) return
+    if (userRecord.balance < SEND_SCOUT_COST) {
+      setScoutMessage({ type: 'error', text: `Need £${SEND_SCOUT_COST} to send scouts.` })
+      return
+    }
+    if (scoutsFull) {
+      setScoutMessage({ type: 'error', text: `All ${maxScouts} scouts are busy. Wait for one to return after next matchday.` })
+      return
+    }
     setScoutLoading(true); setScoutMessage(null)
     try {
+      await supabase.from('users').update({ balance: userRecord.balance - SEND_SCOUT_COST }).eq('id', user.id)
       const { data, error } = await supabase
         .from('player_scouts')
         .upsert({ user_id: user.id, player_id: player.id, scout_type: 'sent', reveals_at_matchday: currentMatchday + 1 }, { onConflict: 'user_id,player_id' })
         .select().single()
       if (error) throw error
       setScoutInfo(data)
+      setOccupiedScouts(n => n + 1)
       onScoutUpdate?.(player.id, data)
+      await refreshUserRecord()
     } catch (err) {
       setScoutMessage({ type: 'error', text: err.message })
     } finally {
@@ -388,24 +437,51 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
                   <a href="/login" className="text-green-400 hover:underline">Sign in</a> to scout players
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={handleSendScouts}
-                    disabled={scoutLoading}
-                    className="py-3 rounded-lg border border-[#1e2330] hover:border-gray-500 text-center transition-colors disabled:opacity-50 group"
-                  >
-                    <div className="text-sm font-medium text-gray-300 group-hover:text-white">Send scouts</div>
-                    <div className="text-xs text-gray-600 mt-0.5">Free · next matchday</div>
-                  </button>
-                  <button
-                    onClick={handleScoutNow}
-                    disabled={scoutLoading || (userRecord?.balance ?? 0) < SCOUT_COST}
-                    className="py-3 rounded-lg bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20 text-center transition-colors disabled:opacity-40"
-                  >
-                    <div className="text-sm font-medium text-amber-400">Scout now</div>
-                    <div className="text-xs text-amber-600 mt-0.5">£{SCOUT_COST} · instant</div>
-                  </button>
-                </div>
+                <>
+                  {/* Scout capacity indicator */}
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-1.5">
+                      {Array.from({ length: maxScouts }).map((_, i) => (
+                        <div
+                          key={i}
+                          className={`w-5 h-5 rounded-full text-[10px] flex items-center justify-center font-bold ${
+                            i < occupiedScouts
+                              ? 'bg-amber-500/20 border border-amber-500/40 text-amber-500'
+                              : 'bg-[#1e2330] border border-[#2a3040] text-gray-600'
+                          }`}
+                        >
+                          {i < occupiedScouts ? '●' : '○'}
+                        </div>
+                      ))}
+                    </div>
+                    <span className={`text-xs font-medium ${scoutsFull ? 'text-red-400' : 'text-gray-500'}`}>
+                      {scoutsFull ? 'All scouts busy' : `${availableScouts}/${maxScouts} scouts free`}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={handleSendScouts}
+                      disabled={scoutLoading || scoutsFull || (userRecord?.balance ?? 0) < SEND_SCOUT_COST}
+                      className="py-3 rounded-lg border border-[#1e2330] hover:border-gray-500 text-center transition-colors disabled:opacity-40 disabled:cursor-not-allowed group"
+                    >
+                      <div className="text-sm font-medium text-gray-300 group-hover:text-white group-disabled:text-gray-600">Send scouts</div>
+                      <div className="text-xs text-gray-600 mt-0.5">£{SEND_SCOUT_COST} · next matchday</div>
+                    </button>
+                    <button
+                      onClick={handleScoutNow}
+                      disabled={scoutLoading || scoutsFull || (userRecord?.balance ?? 0) < SCOUT_COST}
+                      className="py-3 rounded-lg bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20 text-center transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <div className="text-sm font-medium text-amber-400">Scout now</div>
+                      <div className="text-xs text-amber-600 mt-0.5">£{SCOUT_COST} · instant</div>
+                    </button>
+                  </div>
+                  {scoutsFull && (
+                    <div className="mt-2 text-xs text-center text-amber-500/70">
+                      Scouts return after next matchday
+                    </div>
+                  )}
+                </>
               )}
               {scoutMessage && (
                 <div className={`mt-2 text-xs rounded-lg px-3 py-2 ${scoutMessage.type === 'error' ? 'bg-red-500/10 text-red-400' : 'bg-green-500/10 text-green-400'}`}>
