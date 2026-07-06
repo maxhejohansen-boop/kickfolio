@@ -645,7 +645,7 @@ Deno.serve(async (req) => {
             if (focus.min_price != null && Number(p.current_price) < Number(focus.min_price)) continue
             if (newScouts.find(s => s.player_id === p.id)) continue
             scoutedSet.add(p.id)
-            newScouts.push({ user_id: userId, player_id: p.id, scout_type: 'sent', reveals_at_matchday: matchday + 1 })
+            newScouts.push({ user_id: userId, player_id: p.id, scout_type: 'sent', reveals_at_matchday: matchday + 1, focus_id: focus.id })
           }
           if (newScouts.length >= availableSlots) break
         }
@@ -727,30 +727,82 @@ Deno.serve(async (req) => {
 
     // Scout reports: scouts revealing this matchday
     const { data: revealingScouts } = await supabase
-      .from('player_scouts').select('user_id, player_id').eq('scout_type', 'sent').eq('reveals_at_matchday', matchday)
+      .from('player_scouts').select('user_id, player_id, focus_id').eq('scout_type', 'sent').eq('reveals_at_matchday', matchday)
+
+    // Look up focus names for any focus-dispatched scouts
+    const revealFocusIds = [...new Set((revealingScouts ?? []).map((s: any) => s.focus_id).filter(Boolean))]
+    const { data: revealFocuses } = revealFocusIds.length
+      ? await supabase.from('scouting_focuses').select('id, name').in('id', revealFocusIds)
+      : { data: [] }
+    const focusNameMap = new Map((revealFocuses ?? []).map((f: any) => [f.id, f.name]))
+
+    // Group by user+focus (null focus_id = manually sent)
+    const revealGroups = new Map<string, { userId: string; focusId: string | null; players: any[] }>()
     for (const scout of (revealingScouts ?? [])) {
-      const p = playerMap.get(scout.player_id)
-      if (!p) continue
-      const stat = statsInserts.find((s: any) => s.player_id === scout.player_id)
-      const g = stat?.goals ?? 0
-      const a = stat?.assists ?? 0
-      const r = Number(stat?.rating ?? 0)
-      const price = Number(p.current_price ?? 0)
-      const gradeLabel = price < 3 ? 'Strong Buy' : price < 6 ? 'Buy' : price < 10 ? 'Hold' : 'Overvalued'
-      const gradeRec = price < 3
-        ? 'Our scouts believe this player is significantly undervalued. We strongly recommend acquiring shares before the market catches on.'
-        : price < 6
-        ? 'A solid acquisition at current prices. Consistent output and good value.'
-        : price < 10
-        ? 'Trading close to fair value. Buy only if you have conviction in their future output.'
-        : 'Currently at a premium. Exercise caution unless you expect exceptional upcoming performance.'
-      const body = `Dear Manager,\n\nOur scouting team has completed their assessment of ${p.name}, ${p.position} at ${p.club}.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nSCOUT REPORT — MATCHDAY ${matchday}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nPLAYER:   ${p.name}\nPOSITION: ${p.position}\nCLUB:     ${p.club}\n\nMATCHDAY PERFORMANCE\n  Goals:   ${g}\n  Assists: ${a}\n  Rating:  ${r > 0 ? r.toFixed(1) + '/10' : 'Did not play'}\n\nOVERALL ASSESSMENT: ${gradeLabel}\nCurrent Price: £${price.toFixed(2)}\n\nRECOMMENDATION\n${gradeRec}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nBest regards,\nHead of Scouting\nKickfolio`
-      inboxMessages.push({
-        user_id: scout.user_id, type: 'scout_report', sender: 'Head Scout',
-        subject: `Scout Report: ${p.name} (${p.club})`,
-        preview: `${p.name} (${p.position}, ${p.club}) — ${gradeLabel} at £${price.toFixed(2)}`,
-        body, metadata: { player_id: scout.player_id, matchday },
-      })
+      const focusId = (scout as any).focus_id ?? null
+      const key = `${(scout as any).user_id}:${focusId ?? 'manual'}`
+      if (!revealGroups.has(key)) revealGroups.set(key, { userId: (scout as any).user_id, focusId, players: [] })
+      const p = playerMap.get((scout as any).player_id)
+      if (p) revealGroups.get(key)!.players.push(p)
+    }
+
+    function scoutGradeLabel(price: number) {
+      return price < 3 ? 'Strong Buy' : price < 6 ? 'Buy' : price < 10 ? 'Hold' : 'Overvalued'
+    }
+
+    for (const { userId, focusId, players } of revealGroups.values()) {
+      if (focusId) {
+        // Consolidated focus report
+        const focusName = focusNameMap.get(focusId) ?? 'Scouting Focus'
+        const rows = players.map((p: any) => {
+          const stat = statsInserts.find((s: any) => s.player_id === p.id)
+          const g = stat?.goals ?? 0
+          const a = stat?.assists ?? 0
+          const r = Number(stat?.rating ?? 0)
+          const price = Number(p.current_price)
+          const grade = scoutGradeLabel(price)
+          const pos = p.position === 'Goalkeeper' ? ' GK' : p.position === 'Forward' ? 'FWD' : p.position === 'Midfielder' ? 'MID' : 'DEF'
+          const perf = r > 0 ? `${g}G ${a}A  ${r.toFixed(1)}★` : 'Did not play'
+          return `  ${p.name.slice(0, 22).padEnd(22)}  ${pos}  £${String(price.toFixed(2)).padStart(6)}  ${grade.padEnd(11)}  ${perf}`
+        })
+        const gradeCounts: Record<string, number> = {}
+        for (const p of players) {
+          const g = scoutGradeLabel(Number((p as any).current_price))
+          gradeCounts[g] = (gradeCounts[g] ?? 0) + 1
+        }
+        const summaryParts = ['Strong Buy', 'Buy', 'Hold', 'Overvalued']
+          .filter(g => gradeCounts[g]).map(g => `${g}: ${gradeCounts[g]}`).join('  ·  ')
+        const body = `Dear Manager,\n\nYour "${focusName}" focus has completed its Matchday ${matchday} sweep. Our scouts assessed ${players.length} player${players.length !== 1 ? 's' : ''} matching your criteria.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nFOCUS REPORT — MATCHDAY ${matchday}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n${rows.join('\n')}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nSUMMARY\n  ${summaryParts}\n\nVisit the Scouting tab to view full grades and act on these findings.\n\nBest regards,\nHead of Scouting\nKickfolio`
+        const previewNames = players.slice(0, 2).map((p: any) => p.name).join(', ') + (players.length > 2 ? `…` : '')
+        inboxMessages.push({
+          user_id: userId, type: 'scout_report', sender: 'Head of Scouting',
+          subject: `Focus report: "${focusName}" — ${players.length} player${players.length !== 1 ? 's' : ''} revealed`,
+          preview: `${players.length} player${players.length !== 1 ? 's' : ''} revealed: ${previewNames}`,
+          body, metadata: { matchday, focus_id: focusId, player_ids: players.map((p: any) => p.id) },
+        })
+      } else {
+        // Individual report for each manually-sent scout
+        for (const p of players) {
+          const stat = statsInserts.find((s: any) => s.player_id === (p as any).id)
+          const g = stat?.goals ?? 0
+          const a = stat?.assists ?? 0
+          const r = Number(stat?.rating ?? 0)
+          const price = Number((p as any).current_price ?? 0)
+          const gradeLabel = scoutGradeLabel(price)
+          const gradeRec = price < 3
+            ? 'Our scouts believe this player is significantly undervalued. We strongly recommend acquiring shares before the market catches on.'
+            : price < 6 ? 'A solid acquisition at current prices. Consistent output and good value.'
+            : price < 10 ? 'Trading close to fair value. Buy only if you have conviction in their future output.'
+            : 'Currently at a premium. Exercise caution unless you expect exceptional upcoming performance.'
+          const body = `Dear Manager,\n\nOur scouting team has completed their assessment of ${(p as any).name}, ${(p as any).position} at ${(p as any).club}.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nSCOUT REPORT — MATCHDAY ${matchday}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nPLAYER:   ${(p as any).name}\nPOSITION: ${(p as any).position}\nCLUB:     ${(p as any).club}\n\nMATCHDAY PERFORMANCE\n  Goals:   ${g}\n  Assists: ${a}\n  Rating:  ${r > 0 ? r.toFixed(1) + '/10' : 'Did not play'}\n\nOVERALL ASSESSMENT: ${gradeLabel}\nCurrent Price: £${price.toFixed(2)}\n\nRECOMMENDATION\n${gradeRec}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nBest regards,\nHead of Scouting\nKickfolio`
+          inboxMessages.push({
+            user_id: userId, type: 'scout_report', sender: 'Head Scout',
+            subject: `Scout Report: ${(p as any).name} (${(p as any).club})`,
+            preview: `${(p as any).name} (${(p as any).position}, ${(p as any).club}) — ${gradeLabel} at £${price.toFixed(2)}`,
+            body, metadata: { player_id: (p as any).id, matchday },
+          })
+        }
+      }
     }
 
     // Bills: one per user with active focuses
