@@ -1,41 +1,48 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthContext'
 
 const TYPE_META = {
-  bill:         { icon: '💸', label: 'Bill',         color: 'text-red-400',    bg: 'bg-red-500/10',    border: 'border-red-500/20' },
-  scout_report: { icon: '🔍', label: 'Scout Report', color: 'text-green-400',  bg: 'bg-green-500/10',  border: 'border-green-500/20' },
-  tip:          { icon: '💡', label: 'Insider Tip',  color: 'text-amber-400',  bg: 'bg-amber-500/10',  border: 'border-amber-500/20' },
-  news:         { icon: '📰', label: 'News',         color: 'text-blue-400',   bg: 'bg-blue-500/10',   border: 'border-blue-500/20' },
-  interview:    { icon: '🎤', label: 'Interview',    color: 'text-purple-400', bg: 'bg-purple-500/10', border: 'border-purple-500/20' },
+  bill:         { icon: '💸', dot: 'bg-red-400' },
+  scout_report: { icon: '🔍', dot: 'bg-violet-400' },
+  tip:          { icon: '💡', dot: 'bg-amber-400' },
+  news:         { icon: '📰', dot: 'bg-blue-400' },
+  interview:    { icon: '🎤', dot: 'bg-pink-400' },
 }
 
-const CATEGORIES = [
-  { key: 'all',          label: 'All mail',      icon: '📬' },
-  { key: 'unread',       label: 'Unread',        icon: '●' },
-  { key: 'bill',         label: 'Bills',         icon: '💸' },
-  { key: 'scout_report', label: 'Scout Reports', icon: '🔍' },
-  { key: 'tip',          label: 'Tips',          icon: '💡' },
-  { key: 'news',         label: 'News',          icon: '📰' },
+const TABS = [
+  { key: 'all',          label: 'All' },
+  { key: 'unread',       label: 'Unread' },
+  { key: 'scout_report', label: 'Reports' },
+  { key: 'tip',          label: 'Tips' },
+  { key: 'news',         label: 'News' },
+  { key: 'bill',         label: 'Bills' },
 ]
 
-function relTime(ts) {
-  const diff = Date.now() - new Date(ts).getTime()
-  const m = Math.floor(diff / 60000)
-  const h = Math.floor(diff / 3600000)
-  const d = Math.floor(diff / 86400000)
-  if (m < 1)  return 'just now'
-  if (m < 60) return `${m}m`
-  if (h < 24) return `${h}h`
-  if (d < 7)  return new Date(ts).toLocaleDateString('en-GB', { weekday: 'short' })
-  return new Date(ts).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+function msgTime(ts) {
+  return new Date(ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
 }
 
-function SenderAvatar({ type }) {
+function groupByDate(msgs) {
+  const today = new Date().toDateString()
+  const yesterday = new Date(Date.now() - 86400000).toDateString()
+  const map = new Map()
+  for (const m of msgs) {
+    const d = new Date(m.created_at)
+    const ds = d.toDateString()
+    const label = ds === today ? 'Today' : ds === yesterday ? 'Yesterday'
+      : d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
+    if (!map.has(label)) map.set(label, [])
+    map.get(label).push(m)
+  }
+  return [...map.entries()].map(([date, items]) => ({ date, items }))
+}
+
+function Avatar({ type, size = 'sm' }) {
   const meta = TYPE_META[type] ?? TYPE_META.news
   return (
-    <div className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 text-base ${meta.bg} border ${meta.border}`}>
+    <div className={`rounded-full bg-[#252740] border border-[#2e3050] flex items-center justify-center flex-shrink-0 ${size === 'lg' ? 'w-12 h-12 text-xl' : 'w-9 h-9 text-sm'}`}>
       {meta.icon}
     </div>
   )
@@ -45,24 +52,19 @@ export default function Inbox() {
   const { user } = useAuth()
   const [messages, setMessages] = useState([])
   const [selected, setSelected] = useState(null)
-  const [category, setCategory] = useState('all')
+  const [tab, setTab] = useState('all')
   const [loading, setLoading] = useState(true)
-  const detailRef = useRef(null)
 
   useEffect(() => {
     if (!user) return
     load()
-
-    const channel = supabase.channel('inbox-realtime')
+    const ch = supabase.channel('inbox-rt')
       .on('postgres_changes', {
         event: 'INSERT', schema: 'public', table: 'inbox_messages',
         filter: `user_id=eq.${user.id}`,
-      }, ({ new: row }) => {
-        setMessages(prev => [row, ...prev])
-      })
+      }, ({ new: row }) => setMessages(prev => [row, ...prev]))
       .subscribe()
-
-    return () => { supabase.removeChannel(channel) }
+    return () => { supabase.removeChannel(ch) }
   }, [user])
 
   async function load() {
@@ -83,15 +85,11 @@ export default function Inbox() {
       await supabase.from('inbox_messages').update({ read: true }).eq('id', msg.id)
       setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, read: true } : m))
     }
-    setTimeout(() => detailRef.current?.scrollTo({ top: 0 }), 50)
   }
 
-  async function toggleStar(e, id) {
-    e.stopPropagation()
-    const msg = messages.find(m => m.id === id)
-    await supabase.from('inbox_messages').update({ starred: !msg.starred }).eq('id', id)
-    setMessages(prev => prev.map(m => m.id === id ? { ...m, starred: !m.starred } : m))
-    if (selected?.id === id) setSelected(s => ({ ...s, starred: !s.starred }))
+  async function markAllRead() {
+    await supabase.from('inbox_messages').update({ read: true }).eq('user_id', user.id).eq('read', false)
+    setMessages(prev => prev.map(m => ({ ...m, read: true })))
   }
 
   async function deleteMsg(id) {
@@ -100,304 +98,216 @@ export default function Inbox() {
     if (selected?.id === id) setSelected(null)
   }
 
-  async function markAllRead() {
-    await supabase.from('inbox_messages').update({ read: true }).eq('user_id', user.id).eq('read', false)
-    setMessages(prev => prev.map(m => ({ ...m, read: true })))
-  }
-
-  const filtered = messages.filter(m => {
-    if (category === 'all')    return true
-    if (category === 'unread') return !m.read
-    return m.type === category
-  })
-
   const unreadCount = messages.filter(m => !m.read).length
 
-  const counts = {}
-  for (const c of CATEGORIES) {
-    if (c.key === 'all')    counts[c.key] = messages.length
-    else if (c.key === 'unread') counts[c.key] = messages.filter(m => !m.read).length
-    else counts[c.key] = messages.filter(m => m.type === c.key && !m.read).length
+  const filtered = messages.filter(m => {
+    if (tab === 'all')    return true
+    if (tab === 'unread') return !m.read
+    return m.type === tab
+  })
+
+  const tabBadge = key => {
+    if (key === 'all') return null
+    const cnt = key === 'unread'
+      ? unreadCount
+      : messages.filter(m => m.type === key && !m.read).length
+    return cnt > 0 ? cnt : null
   }
 
-  if (!user) {
-    return (
-      <div className="max-w-2xl mx-auto px-4 py-16 text-center">
-        <p className="text-gray-500">
-          <Link to="/login" className="text-green-400 hover:underline">Sign in</Link> to view your inbox
-        </p>
-      </div>
-    )
-  }
-
-  const meta = selected ? TYPE_META[selected.type] ?? TYPE_META.news : null
+  const groups = groupByDate(filtered)
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-      <div className="flex gap-4 h-[calc(100vh-8rem)]">
+    <div className="flex overflow-hidden" style={{ height: 'calc(100vh - 3.5rem)' }}>
 
-        {/* ── Sidebar ──────────────────────────────────────────── */}
-        <div className="hidden lg:flex flex-col w-52 flex-shrink-0">
-          <div className="flex items-center justify-between mb-4">
-            <h1 className="text-lg font-bold text-white">Inbox</h1>
-            {unreadCount > 0 && (
-              <span className="bg-blue-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">{unreadCount}</span>
-            )}
-          </div>
+      {/* ── List panel ──────────────────────────────────────────────── */}
+      <div className={`flex flex-col bg-[#15162a] border-r border-[#1e2040] flex-shrink-0 ${selected ? 'hidden lg:flex lg:w-[380px]' : 'flex-1 lg:flex lg:w-[380px]'}`}>
 
-          <nav className="space-y-0.5 flex-1">
-            {CATEGORIES.map(({ key, label, icon }) => {
-              const cnt = counts[key] ?? 0
-              return (
-                <button
-                  key={key}
-                  onClick={() => { setCategory(key); setSelected(null) }}
-                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors ${
-                    category === key
-                      ? 'bg-blue-500/15 text-blue-300 font-medium'
-                      : 'text-gray-400 hover:bg-[#1a1f28] hover:text-white'
-                  }`}
-                >
-                  <span className="flex items-center gap-2">
-                    <span className="text-base leading-none">{icon}</span>
-                    {label}
+        {/* Tab bar */}
+        <div className="flex items-center border-b border-[#1e2040] px-2 flex-shrink-0 overflow-x-auto">
+          {TABS.map(({ key, label }) => {
+            const badge = tabBadge(key)
+            const active = tab === key
+            return (
+              <button
+                key={key}
+                onClick={() => setTab(key)}
+                className={`relative flex items-center gap-1.5 px-3 py-3 text-[13px] font-medium transition-colors whitespace-nowrap ${
+                  active ? 'text-white border-b-2 border-violet-500' : 'text-[#6b7080] hover:text-[#9ca3af]'
+                }`}
+              >
+                {label}
+                {badge && (
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none ${active ? 'bg-violet-600 text-white' : 'bg-[#252740] text-[#9ca3af]'}`}>
+                    {badge > 99 ? '99+' : badge}
                   </span>
-                  {cnt > 0 && key !== 'all' && (
-                    <span className={`text-xs font-bold ${category === key ? 'text-blue-300' : 'text-gray-500'}`}>{cnt}</span>
-                  )}
-                </button>
-              )
-            })}
-          </nav>
-
-          {unreadCount > 0 && (
-            <button
-              onClick={markAllRead}
-              className="mt-4 text-xs text-gray-500 hover:text-white transition-colors text-left px-3"
-            >
-              Mark all as read
-            </button>
-          )}
+                )}
+              </button>
+            )
+          })}
+          <button
+            onClick={markAllRead}
+            disabled={unreadCount === 0}
+            className="ml-auto p-2 text-[#6b7080] hover:text-white disabled:opacity-25 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+            title="Mark all as read"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+            </svg>
+          </button>
         </div>
 
-        {/* ── Mobile category bar ────────────────────────────── */}
-        <div className="lg:hidden fixed bottom-0 left-0 right-0 z-50 bg-[#111318] border-t border-[#1e2330] flex overflow-x-auto px-2 py-1.5 gap-1">
-          {CATEGORIES.map(({ key, label, icon }) => (
-            <button
-              key={key}
-              onClick={() => { setCategory(key); setSelected(null) }}
-              className={`flex flex-col items-center gap-0.5 px-3 py-1 rounded-lg text-[10px] whitespace-nowrap flex-shrink-0 transition-colors ${
-                category === key ? 'bg-blue-500/15 text-blue-300' : 'text-gray-500'
-              }`}
-            >
-              <span>{icon}</span>
-              <span>{label}</span>
-            </button>
-          ))}
-        </div>
-
-        {/* ── Main area ─────────────────────────────────────── */}
-        <div className="flex-1 flex overflow-hidden rounded-xl border border-[#1e2330] bg-[#111318]">
-
-          {/* Message list — hidden on mobile when a message is selected */}
-          <div className={`flex flex-col ${selected ? 'hidden lg:flex lg:w-96 lg:border-r lg:border-[#1e2330]' : 'flex-1'}`}>
-            {/* List header */}
-            <div className="px-4 py-3 border-b border-[#1e2330] flex items-center justify-between flex-shrink-0">
-              <span className="text-xs text-gray-500 font-medium uppercase tracking-wider">
-                {CATEGORIES.find(c => c.key === category)?.label}
-                {filtered.length > 0 && <span className="ml-1.5 text-gray-600">· {filtered.length}</span>}
-              </span>
-              {/* Mobile title */}
-              <h1 className="lg:hidden text-white font-bold flex items-center gap-2">
-                Inbox
-                {unreadCount > 0 && <span className="bg-blue-500 text-white text-xs font-bold px-1.5 py-0.5 rounded-full">{unreadCount}</span>}
-              </h1>
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto">
+          {loading ? (
+            <div className="p-3 space-y-1">
+              {Array.from({ length: 10 }).map((_, i) => (
+                <div key={i} className="h-[62px] bg-[#1e2040] rounded animate-pulse" />
+              ))}
             </div>
+          ) : filtered.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full py-20 text-center px-6">
+              <div className="text-3xl mb-3 opacity-20">📭</div>
+              <p className="text-[#6b7080] text-sm">No messages</p>
+              <p className="text-[#4b5060] text-xs mt-1">Run a matchday to start receiving messages</p>
+            </div>
+          ) : (
+            groups.map(({ date, items }) => (
+              <div key={date}>
+                <div className="px-4 pt-3.5 pb-1.5 sticky top-0 z-10 bg-[#15162a]">
+                  <span className="text-[10px] text-[#4b5060] font-semibold uppercase tracking-widest">{date}</span>
+                </div>
 
-            {/* Messages */}
-            <div className="flex-1 overflow-y-auto">
-              {loading ? (
-                <div className="p-4 space-y-3">
-                  {Array.from({ length: 6 }).map((_, i) => (
-                    <div key={i} className="h-16 bg-[#1a1f28] rounded-lg animate-pulse" />
-                  ))}
-                </div>
-              ) : filtered.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full py-20 text-center px-6">
-                  <div className="text-4xl mb-3 opacity-40">📭</div>
-                  <p className="text-gray-500 text-sm">No messages here yet.</p>
-                  <p className="text-gray-600 text-xs mt-1">Run a matchday to start receiving scout reports, news, and tips.</p>
-                </div>
-              ) : (
-                filtered.map(msg => {
-                  const typeMeta = TYPE_META[msg.type] ?? TYPE_META.news
+                {items.map(msg => {
                   const isSelected = selected?.id === msg.id
+                  const typeMeta = TYPE_META[msg.type] ?? TYPE_META.news
                   return (
                     <div
                       key={msg.id}
                       onClick={() => open(msg)}
-                      className={`flex items-start gap-3 px-4 py-3.5 cursor-pointer border-b border-[#1a1f28] transition-colors group ${
+                      className={`relative flex items-center gap-3 pl-6 pr-4 py-3 cursor-pointer transition-colors border-l-2 ${
                         isSelected
-                          ? 'bg-blue-500/10'
-                          : msg.read
-                            ? 'hover:bg-[#161a21]'
-                            : 'bg-[#141820] hover:bg-[#171c26]'
+                          ? 'bg-violet-900/40 border-violet-500'
+                          : 'border-transparent hover:bg-[#1e2040]/70'
                       }`}
                     >
-                      {/* Unread dot */}
-                      <div className="flex-shrink-0 w-2 flex items-center justify-center mt-1.5">
-                        {!msg.read && <div className="w-2 h-2 rounded-full bg-blue-400" />}
-                      </div>
+                      {!msg.read && (
+                        <span className={`absolute left-2 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full ${typeMeta.dot}`} />
+                      )}
 
-                      <SenderAvatar type={msg.type} />
+                      <Avatar type={msg.type} />
 
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-baseline justify-between gap-2 mb-0.5">
-                          <span className={`text-sm truncate ${msg.read ? 'text-gray-300 font-normal' : 'text-white font-semibold'}`}>
+                        <div className="flex items-center justify-between gap-2 mb-0.5">
+                          <span className={`text-[13px] truncate leading-none ${msg.read ? 'text-[#9ca3af] font-normal' : 'text-white font-semibold'}`}>
                             {msg.sender}
                           </span>
-                          <span className="text-[11px] text-gray-600 flex-shrink-0">{relTime(msg.created_at)}</span>
+                          <div className="flex items-center gap-1 flex-shrink-0">
+                            {msg.read && (
+                              <svg className="w-3 h-3 text-violet-500/70" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                              </svg>
+                            )}
+                            <span className="text-[11px] text-[#4b5060]">{msgTime(msg.created_at)}</span>
+                          </div>
                         </div>
-                        <div className={`text-sm truncate mb-0.5 ${msg.read ? 'text-gray-500' : 'text-gray-200 font-medium'}`}>
+                        <div className={`text-[13px] truncate leading-snug ${msg.read ? 'text-[#4b5060]' : 'text-[#b0b4cc]'}`}>
                           {msg.subject}
                         </div>
-                        <div className="flex items-center gap-2">
-                          <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${typeMeta.bg} ${typeMeta.color} border ${typeMeta.border}`}>
-                            {typeMeta.label}
-                          </span>
-                          <span className="text-xs text-gray-600 truncate">{msg.preview}</span>
-                        </div>
                       </div>
-
-                      {/* Star */}
-                      <button
-                        onClick={e => toggleStar(e, msg.id)}
-                        className={`flex-shrink-0 mt-0.5 text-base opacity-0 group-hover:opacity-100 transition-opacity ${msg.starred ? 'opacity-100 text-amber-400' : 'text-gray-600 hover:text-amber-400'}`}
-                      >
-                        {msg.starred ? '★' : '☆'}
-                      </button>
                     </div>
                   )
-                })
-              )}
-            </div>
-          </div>
-
-          {/* ── Detail pane ─────────────────────────────────── */}
-          {selected ? (
-            <div ref={detailRef} className="flex-1 overflow-y-auto flex flex-col">
-              {/* Detail header */}
-              <div className="flex items-center gap-3 px-6 py-4 border-b border-[#1e2330] flex-shrink-0 sticky top-0 bg-[#111318] z-10">
-                <button
-                  onClick={() => setSelected(null)}
-                  className="text-gray-400 hover:text-white transition-colors flex items-center gap-1.5 text-sm"
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
-                  </svg>
-                  <span className="hidden sm:inline">Back</span>
-                </button>
-                <div className="flex-1 min-w-0">
-                  <h2 className="text-white font-semibold text-base truncate">{selected.subject}</h2>
-                </div>
-                <button
-                  onClick={e => toggleStar(e, selected.id)}
-                  className={`flex-shrink-0 text-xl transition-colors ${selected.starred ? 'text-amber-400' : 'text-gray-600 hover:text-amber-400'}`}
-                >
-                  {selected.starred ? '★' : '☆'}
-                </button>
-                <button
-                  onClick={() => deleteMsg(selected.id)}
-                  className="flex-shrink-0 text-gray-600 hover:text-red-400 transition-colors text-sm ml-1"
-                  title="Delete"
-                >
-                  🗑
-                </button>
+                })}
               </div>
-
-              {/* Message card */}
-              <div className="flex-1 p-6">
-                <div className="max-w-2xl">
-                  {/* Sender row */}
-                  <div className="flex items-start gap-4 mb-6">
-                    <SenderAvatar type={selected.type} />
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-white font-semibold">{selected.sender}</span>
-                        <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${meta.bg} ${meta.color} border ${meta.border}`}>
-                          {meta.label}
-                        </span>
-                      </div>
-                      <div className="text-xs text-gray-500 mt-0.5">
-                        {new Date(selected.created_at).toLocaleString('en-GB', {
-                          weekday: 'short', day: 'numeric', month: 'short',
-                          hour: '2-digit', minute: '2-digit'
-                        })}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Body */}
-                  <div className={`rounded-xl border p-5 ${meta.bg} ${meta.border}`}>
-                    <p className="text-gray-200 text-sm leading-relaxed whitespace-pre-line font-mono">
-                      {selected.body}
-                    </p>
-                  </div>
-
-                  {/* Action bar */}
-                  <div className="flex items-center gap-3 mt-4">
-                    {selected.type === 'scout_report' && selected.metadata?.player_id && (
-                      <Link
-                        to="/scouting"
-                        className="text-xs bg-green-500 hover:bg-green-400 text-black font-bold px-3 py-1.5 rounded-lg transition-colors"
-                      >
-                        View in Scouting →
-                      </Link>
-                    )}
-                    {selected.type === 'tip' && (
-                      <Link
-                        to="/market"
-                        className="text-xs bg-amber-500 hover:bg-amber-400 text-black font-bold px-3 py-1.5 rounded-lg transition-colors"
-                      >
-                        Open Market →
-                      </Link>
-                    )}
-                    {selected.type === 'news' && (
-                      <Link
-                        to="/market"
-                        className="text-xs bg-blue-500 hover:bg-blue-400 text-white font-bold px-3 py-1.5 rounded-lg transition-colors"
-                      >
-                        Open Market →
-                      </Link>
-                    )}
-                    {selected.type === 'bill' && (
-                      <Link
-                        to="/portfolio"
-                        className="text-xs bg-[#1e2330] hover:bg-[#2a3040] text-gray-300 font-medium px-3 py-1.5 rounded-lg transition-colors border border-[#2a3040]"
-                      >
-                        View Portfolio →
-                      </Link>
-                    )}
-                    <button
-                      onClick={() => deleteMsg(selected.id)}
-                      className="text-xs text-red-500/60 hover:text-red-400 transition-colors ml-auto"
-                    >
-                      Delete message
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="hidden lg:flex flex-1 items-center justify-center text-center px-8">
-              <div>
-                <div className="text-5xl mb-4 opacity-20">📬</div>
-                <p className="text-gray-600 text-sm">Select a message to read it</p>
-              </div>
-            </div>
+            ))
           )}
         </div>
       </div>
+
+      {/* ── Detail pane ─────────────────────────────────────────────── */}
+      {selected ? (
+        <div className="flex-1 flex flex-col bg-[#1a1b2f] overflow-hidden">
+
+          {/* Header */}
+          <div className="flex items-start gap-4 px-6 py-5 border-b border-[#1e2040] flex-shrink-0">
+            <button
+              onClick={() => setSelected(null)}
+              className="lg:hidden text-[#6b7080] hover:text-white mt-0.5 flex-shrink-0"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+              </svg>
+            </button>
+
+            <Avatar type={selected.type} size="lg" />
+
+            <div className="flex-1 min-w-0">
+              <div className="text-[#9ca3af] text-[13px] mb-0.5">{selected.sender}</div>
+              <div className="text-white font-semibold text-[17px] leading-snug">{selected.subject}</div>
+            </div>
+
+            <div className="flex items-center gap-3 flex-shrink-0 mt-1">
+              <span className="text-[#4b5060] text-sm tabular-nums">{msgTime(selected.created_at)}</span>
+              <button
+                onClick={() => deleteMsg(selected.id)}
+                className="text-[#4b5060] hover:text-red-400 transition-colors"
+                title="Delete"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          {/* Body */}
+          <div className="flex-1 overflow-y-auto px-6 py-6">
+            <div className="max-w-2xl">
+              <p className="text-[#c4c6d8] text-sm leading-7 whitespace-pre-line font-mono">
+                {selected.body}
+              </p>
+            </div>
+          </div>
+
+          {/* Action bar */}
+          <div className="flex-shrink-0 border-t border-[#1e2040]">
+            <div className="flex items-center gap-4 px-6 py-3.5 bg-gradient-to-r from-violet-900/40 to-transparent">
+              <span className="text-[#9ca3af] text-[13px] font-semibold tracking-wide">Action message</span>
+              <div className="w-px h-4 bg-[#1e2040]" />
+              {selected.type === 'scout_report' && (
+                <Link
+                  to="/scouting"
+                  className="text-[13px] bg-violet-700 hover:bg-violet-600 text-white font-medium px-4 py-1.5 rounded transition-colors"
+                >
+                  View in Scouting →
+                </Link>
+              )}
+              {(selected.type === 'tip' || selected.type === 'news') && (
+                <Link
+                  to="/market"
+                  className="text-[13px] bg-violet-700 hover:bg-violet-600 text-white font-medium px-4 py-1.5 rounded transition-colors"
+                >
+                  Open Market →
+                </Link>
+              )}
+              {selected.type === 'bill' && (
+                <Link
+                  to="/portfolio"
+                  className="text-[13px] bg-violet-700 hover:bg-violet-600 text-white font-medium px-4 py-1.5 rounded transition-colors"
+                >
+                  View Portfolio →
+                </Link>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="hidden lg:flex flex-1 items-center justify-center bg-[#1a1b2f]">
+          <div className="text-center select-none">
+            <div className="text-5xl mb-4 opacity-10">📬</div>
+            <p className="text-[#4b5060] text-sm">Select a message to read it</p>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
