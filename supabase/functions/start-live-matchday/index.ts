@@ -55,6 +55,76 @@ function dividendPerShare(position: string, stat: Record<string, unknown>): numb
   return parseFloat(d.toFixed(4))
 }
 
+function pickInterview(matchday: number, change: number, bestPlayer: string) {
+  const pick = <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)]
+  const outlets  = ['BBC Sport', 'Sky Sports', 'The Athletic', 'TalkSport', 'Evening Standard']
+  const pundits  = ['Gary Lineker', 'Jamie Carragher', 'Roy Keane', 'Alan Shearer', 'Micah Richards']
+  const sponsors = ['SportAnalytics Ltd', 'FanZone Media', 'MatchTrack Pro', 'DataSport UK']
+  const outlet   = pick(outlets)
+  const pundit   = pick(pundits)
+  const sponsor  = pick(sponsors)
+  const fee      = pick([150, 200, 250, 300])
+  const isUp     = change >= 0
+
+  const scenarios = [
+    {
+      sender: sponsor, subject: `Sponsorship offer: ${sponsor}`,
+      body: `${sponsor} has been tracking your performance and wants to feature your approach in their latest campaign.\n\nThey're offering a flat fee of £${fee} for a brief quote about your investment philosophy.`,
+      question: `${sponsor} wants a quote for their campaign. Do you accept?`,
+      options: [
+        { id: 'a', label: 'Accept the deal',  text: `"Happy to help — we always enjoy sharing our process with the wider community."`, effect: { type: 'balance', amount: fee } },
+        { id: 'b', label: 'Negotiate upward', text: `"We'd consider it for £${Math.round(fee * 1.6)}, but not a penny less."`,          effect: { type: 'balance_gamble', success_chance: 0.45, amount: Math.round(fee * 1.6) } },
+        { id: 'c', label: 'Decline politely', text: `"We appreciate the offer, but prefer to keep a low profile right now."`,           effect: { type: 'none' } },
+      ],
+    },
+    {
+      sender: outlet, subject: `${outlet} wants a comment`,
+      body: `${outlet} is putting together a feature on matchday ${matchday}'s standout portfolio managers. ${isUp ? 'Your portfolio movement caught their eye.' : 'They want to capture a range of voices after a volatile matchday.'}\n\nA journalist is waiting for your statement.`,
+      question: isUp ? `Your portfolio had a strong matchday. What's behind it?` : `It was a tough matchday for many investors. How are you reading the market?`,
+      options: isUp ? [
+        { id: 'a', label: 'Credit your scouting', text: `"Good scouting is the foundation. We do our homework before every matchday."`,   effect: { type: 'none' } },
+        { id: 'b', label: 'Stay humble',           text: `"It was a positive matchday, but the season is long. We stay focused."`,          effect: { type: 'none' } },
+        { id: 'c', label: 'Take the credit',       text: `"We predicted this. The data doesn't lie — we read it better than most."`,       effect: { type: 'none' } },
+      ] : [
+        { id: 'a', label: 'Back your process', text: `"The market has cycles. We back our process and stay patient."`,               effect: { type: 'none' } },
+        { id: 'b', label: 'Deflect',           text: `"We'll review the numbers carefully. No public statement today."`,             effect: { type: 'none' } },
+        { id: 'c', label: 'Own it',            text: `"We got it wrong this matchday. We'll learn from it and come back stronger."`, effect: { type: 'none' } },
+      ],
+    },
+    {
+      sender: 'Match of the Day', subject: `${pundit} challenges your strategy`,
+      body: `During a recent broadcast, ${pundit} sparked debate by dismissing football portfolio investing as "dressed-up gambling with no real skill involved."\n\nA producer has reached out with a £${fee} appearance fee if you agree to respond live on air.`,
+      question: `${pundit} says player investing is "just gambling in a suit." How do you respond?`,
+      options: [
+        { id: 'a', label: 'Appear & defend it',  text: `"${pundit} is entitled to his view. I'd invite him to look at the numbers behind a good scouting network."`, effect: { type: 'balance', amount: fee } },
+        { id: 'b', label: 'Decline',             text: `"No comment. We let our portfolio performance speak for itself."`,                                            effect: { type: 'none' } },
+        { id: 'c', label: 'Hit back online',     text: `"Respectfully, ${pundit} spent 20 years kicking a ball. Maybe stick to that."`,                              effect: { type: 'none' } },
+      ],
+    },
+    {
+      sender: 'Transfer Daily', subject: `Transfer rumour: are you buying ${bestPlayer || 'a star player'}?`,
+      body: `Transfer Daily is running an exclusive suggesting you are preparing a significant position on ${bestPlayer || 'a leading Premier League player'} ahead of next matchday.\n\nThe speculation is already moving their share price. Their journalist is requesting a response.`,
+      question: `Reports link you to ${bestPlayer || 'a top player'}. Is there any truth to it?`,
+      options: [
+        { id: 'a', label: 'Confirm interest', text: `"${bestPlayer || 'The player'} is someone we have been monitoring closely. No further comment."`, effect: { type: 'none' } },
+        { id: 'b', label: 'Flat denial',      text: `"We have no interest in that position at this time. The report is inaccurate."`,                  effect: { type: 'none' } },
+        { id: 'c', label: 'No comment',       text: `"We never comment on potential portfolio moves before they're made."`,                             effect: { type: 'none' } },
+      ],
+    },
+    {
+      sender: 'The Athletic', subject: `Insider trading allegation — your response?`,
+      body: `The Athletic's investigative desk has received a tip suggesting your recent trades may have been made on non-public information.\n\nThey're giving you the opportunity to respond before publishing. The journalist stresses this does not imply wrongdoing.`,
+      question: `The Athletic is asking about "unusual trading patterns" in your recent matchdays. How do you respond?`,
+      options: [
+        { id: 'a', label: 'Deny any wrongdoing',   text: `"Our trades are entirely based on publicly available data and our own scouting network. We have nothing to hide."`, effect: { type: 'none' } },
+        { id: 'b', label: 'Threaten legal action', text: `"This allegation is defamatory. Our legal team will be in touch before any publication."`,                          effect: { type: 'none' } },
+        { id: 'c', label: 'Refuse to engage',      text: `"We don't respond to fishing expeditions. Publish what you like."`,                                               effect: { type: 'none' } },
+      ],
+    },
+  ]
+  return pick(scenarios)
+}
+
 function generatePlayerStat(player: Record<string, unknown>, result: string, allPlayers: Record<string, unknown>[]) {
   const club = player.club as string
   const clubPlayers = allPlayers.filter(p => p.club === club)
@@ -498,6 +568,15 @@ async function runLiveMatchday(matchday: number, players: Record<string, unknown
         preview, body,
         metadata: { matchday, valueBefore, valueAfter, change, invested, dividends: divs },
       })
+
+      if (Math.random() < 0.6) {
+        const iv = pickInterview(matchday, change, bestName)
+        summaryMessages.push({
+          user_id: userId, type: 'interview', sender: iv.sender,
+          subject: iv.subject, preview: iv.question, body: iv.body,
+          metadata: { question: iv.question, options: iv.options, responded: false, chosen_option: null, matchday },
+        })
+      }
     }
     if (summaryMessages.length) await supabase.from('inbox_messages').insert(summaryMessages)
   }

@@ -3,6 +3,110 @@ import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthContext'
 
+function InterviewPanel({ message, onRespond }) {
+  const meta    = message.metadata ?? {}
+  const options = meta.options ?? []
+  const responded    = meta.responded ?? false
+  const chosenId     = meta.chosen_option ?? null
+  const resolvedEffect = meta.resolved_effect ?? null
+  const [submitting, setSubmitting] = useState(null)
+
+  const chosenOption = options.find(o => o.id === chosenId)
+
+  async function respond(optionId) {
+    setSubmitting(optionId)
+    const { data, error } = await supabase.rpc('respond_to_interview', {
+      p_message_id: message.id,
+      p_option_id:  optionId,
+    })
+    if (!error && data?.success) {
+      const newMeta = {
+        ...meta,
+        responded:       true,
+        chosen_option:   optionId,
+        resolved_effect: data.effect,
+      }
+      onRespond(message.id, newMeta)
+    }
+    setSubmitting(null)
+  }
+
+  function effectLabel(effect) {
+    if (!effect) return null
+    if (effect.type === 'balance') return `+£${Number(effect.amount).toFixed(2)} added to your wallet`
+    if (effect.type === 'balance_gamble') {
+      const success = effect.resolved_success ?? false
+      const amount  = Number(effect.resolved_amount ?? 0)
+      return success
+        ? `Negotiation successful — +£${amount.toFixed(2)} added to your wallet`
+        : `They didn't budge. No payment received.`
+    }
+    return null
+  }
+
+  const label = effectLabel(responded ? resolvedEffect : null)
+
+  return (
+    <div className="mt-6 pt-6 border-t border-[#1e2330]">
+      {meta.question && (
+        <div className="mb-5 p-4 bg-[#1a1f28] border border-[#1e2330] rounded-lg">
+          <div className="text-[10px] text-gray-600 font-semibold uppercase tracking-wider mb-1.5">The question</div>
+          <p className="text-white text-sm font-medium leading-snug">{meta.question}</p>
+        </div>
+      )}
+
+      <div className="text-[10px] text-gray-600 font-semibold uppercase tracking-wider mb-3">
+        {responded ? 'Your response' : 'Choose your response'}
+      </div>
+
+      {responded ? (
+        <div className="space-y-3">
+          <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-lg">
+            <div className="flex items-start gap-2">
+              <svg className="w-4 h-4 text-green-400 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+              </svg>
+              <div>
+                <div className="text-xs text-green-400 font-semibold mb-1">{chosenOption?.label}</div>
+                <p className="text-gray-300 text-sm italic">"{chosenOption?.text}"</p>
+              </div>
+            </div>
+          </div>
+          {label && (
+            <div className="px-4 py-2.5 bg-[#1a1f28] border border-[#1e2330] rounded-lg text-sm text-gray-400">
+              {label}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {options.map(opt => (
+            <button
+              key={opt.id}
+              onClick={() => respond(opt.id)}
+              disabled={submitting !== null}
+              className="w-full text-left p-4 bg-[#111318] border border-[#1e2330] hover:border-gray-500 hover:bg-[#1a1f28] rounded-lg transition-colors group disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <div className="flex items-center justify-between gap-3 mb-1">
+                <span className="text-sm text-white font-medium group-hover:text-green-400 transition-colors">
+                  {submitting === opt.id ? 'Submitting…' : opt.label}
+                </span>
+                {opt.effect?.type === 'balance' && (
+                  <span className="text-xs text-green-400 font-semibold flex-shrink-0">+£{opt.effect.amount}</span>
+                )}
+                {opt.effect?.type === 'balance_gamble' && (
+                  <span className="text-xs text-amber-400 font-semibold flex-shrink-0">+£{opt.effect.amount}?</span>
+                )}
+              </div>
+              <p className="text-gray-500 text-xs italic">"{opt.text}"</p>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 const TYPE_META = {
   bill:         { label: 'Bill',    short: 'BILL',   color: 'text-red-400',    bar: 'bg-red-500',    chip: 'bg-red-500/10 text-red-400 border-red-500/20' },
   scout_report: { label: 'Report',  short: 'REPORT', color: 'text-green-400',  bar: 'bg-green-500',  chip: 'bg-green-500/10 text-green-400 border-green-500/20' },
@@ -14,6 +118,7 @@ const TYPE_META = {
 const TABS = [
   { key: 'all',          label: 'All' },
   { key: 'unread',       label: 'Unread' },
+  { key: 'interview',    label: 'Media' },
   { key: 'scout_report', label: 'Reports' },
   { key: 'tip',          label: 'Tips' },
   { key: 'news',         label: 'News' },
@@ -40,7 +145,7 @@ function groupByDate(msgs) {
 }
 
 export default function Inbox() {
-  const { user } = useAuth()
+  const { user, refreshUserRecord } = useAuth()
   const [messages,  setMessages]  = useState([])
   const [selected,  setSelected]  = useState(null)
   const [tab,       setTab]       = useState('all')
@@ -81,6 +186,13 @@ export default function Inbox() {
   async function markAllRead() {
     await supabase.from('inbox_messages').update({ read: true }).eq('user_id', user.id).eq('read', false)
     setMessages(prev => prev.map(m => ({ ...m, read: true })))
+  }
+
+  function handleInterviewResponse(msgId, newMeta) {
+    const update = m => m.id === msgId ? { ...m, metadata: newMeta } : m
+    setMessages(prev => prev.map(update))
+    setSelected(prev => prev?.id === msgId ? { ...prev, metadata: newMeta } : prev)
+    refreshUserRecord()
   }
 
   async function deleteMsg(id) {
@@ -258,10 +370,17 @@ export default function Inbox() {
               <p className="text-gray-300 text-sm leading-7 whitespace-pre-line">
                 {selected.body}
               </p>
+              {selected.type === 'interview' && (
+                <InterviewPanel
+                  message={selected}
+                  onRespond={handleInterviewResponse}
+                />
+              )}
             </div>
           </div>
 
-          {/* Action bar */}
+          {/* Action bar — hidden for interviews (options are inline) */}
+          {selected.type !== 'interview' && (
           <div className="flex-shrink-0 border-t border-[#1e2330] bg-[#111318] px-6 py-3 flex items-center gap-3">
             <span className="text-gray-600 text-xs font-medium uppercase tracking-wider">Action</span>
             <div className="w-px h-4 bg-[#1e2330]" />
@@ -290,6 +409,7 @@ export default function Inbox() {
               </Link>
             )}
           </div>
+          )}
         </div>
       ) : (
         <div className="hidden lg:flex flex-1 items-center justify-center bg-[#0d0e13]">

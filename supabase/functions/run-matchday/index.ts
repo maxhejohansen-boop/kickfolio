@@ -307,6 +307,86 @@ function dividendPerShare(position: string, stat: { goals: number; assists: numb
   return parseFloat(d.toFixed(4))
 }
 
+// ── Interview scenarios ──────────────────────────────────────────────────────
+
+function pickInterview(matchday: number, change: number, bestPlayer: string) {
+  const pick = <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)]
+  const outlets  = ['BBC Sport', 'Sky Sports', 'The Athletic', 'TalkSport', 'Evening Standard']
+  const pundits  = ['Gary Lineker', 'Jamie Carragher', 'Roy Keane', 'Alan Shearer', 'Micah Richards']
+  const sponsors = ['SportAnalytics Ltd', 'FanZone Media', 'MatchTrack Pro', 'DataSport UK']
+  const outlet   = pick(outlets)
+  const pundit   = pick(pundits)
+  const sponsor  = pick(sponsors)
+  const fee      = pick([150, 200, 250, 300])
+  const isUp     = change >= 0
+
+  const scenarios = [
+    // — Sponsorship deal (always has a balance reward)
+    {
+      sender: sponsor, subject: `Sponsorship offer: ${sponsor}`,
+      body: `${sponsor} has been tracking your performance this season and wants to feature your approach in their latest campaign.\n\nThey believe your strategy would resonate with their audience of football finance enthusiasts.\n\nThey're offering a flat fee of £${fee} for a brief quote about your investment philosophy.`,
+      question: `${sponsor} wants a quote for their campaign. Do you accept?`,
+      options: [
+        { id: 'a', label: 'Accept the deal',    text: `"Happy to help — we always enjoy sharing our process with the wider community."`, effect: { type: 'balance', amount: fee } },
+        { id: 'b', label: 'Negotiate upward',   text: `"We'd consider it for £${Math.round(fee * 1.6)}, but not a penny less."`,          effect: { type: 'balance_gamble', success_chance: 0.45, amount: Math.round(fee * 1.6) } },
+        { id: 'c', label: 'Decline politely',   text: `"We appreciate the offer, but prefer to keep a low profile right now."`,           effect: { type: 'none' } },
+      ],
+    },
+    // — Post-matchday interview (flavour only)
+    {
+      sender: outlet, subject: `${outlet} wants a comment`,
+      body: `${outlet} is putting together a feature on matchday ${matchday}'s standout portfolio managers. ${isUp ? 'Your portfolio movement this week caught their eye.' : 'They want to capture a range of voices after a volatile matchday.'}\n\nA journalist is waiting for your statement.`,
+      question: isUp
+        ? `Your portfolio had a strong matchday. What's behind it?`
+        : `It was a tough matchday for many investors. How are you reading the market?`,
+      options: isUp ? [
+        { id: 'a', label: 'Credit your scouting', text: `"Good scouting is the foundation. We do our homework before every matchday."`,  effect: { type: 'none' } },
+        { id: 'b', label: 'Stay humble',           text: `"It was a positive matchday, but the season is long. We stay focused."`,         effect: { type: 'none' } },
+        { id: 'c', label: 'Take the credit',       text: `"We predicted this. The data doesn't lie — we just read it better than most."`, effect: { type: 'none' } },
+      ] : [
+        { id: 'a', label: 'Back your process',  text: `"The market has cycles. We back our process and stay patient."`,               effect: { type: 'none' } },
+        { id: 'b', label: 'Deflect',            text: `"We'll review the numbers carefully. No public statement today."`,             effect: { type: 'none' } },
+        { id: 'c', label: 'Own it',             text: `"We got it wrong this matchday. We'll learn from it and come back stronger."`, effect: { type: 'none' } },
+      ],
+    },
+    // — Pundit debate (appearance fee)
+    {
+      sender: 'Match of the Day', subject: `${pundit} challenges your strategy`,
+      body: `During a recent broadcast, ${pundit} sparked debate by dismissing football portfolio investing as "dressed-up gambling with no real skill involved."\n\nA producer has reached out — they've offered a £${fee} appearance fee if you agree to respond live on air.`,
+      question: `${pundit} says player investing is "just gambling in a suit." How do you respond?`,
+      options: [
+        { id: 'a', label: 'Appear & defend it',  text: `"${pundit} is entitled to his view. I'd invite him to look at the numbers behind a good scouting network."`,    effect: { type: 'balance', amount: fee } },
+        { id: 'b', label: 'Decline the segment', text: `"No comment. We let our portfolio performance speak for itself."`,                                                effect: { type: 'none' } },
+        { id: 'c', label: 'Respond online',       text: `"Respectfully, ${pundit} spent 20 years kicking a ball. Maybe stick to that kind of analysis."`,               effect: { type: 'none' } },
+      ],
+    },
+    // — Transfer rumour
+    {
+      sender: 'Transfer Daily', subject: `Transfer rumour: are you buying ${bestPlayer || 'a star player'}?`,
+      body: `Transfer Daily is running an exclusive suggesting you are preparing a significant position on ${bestPlayer || 'a leading Premier League player'} ahead of next matchday.\n\nThe speculation is already moving their share price. Their journalist is requesting an official response.`,
+      question: `Reports link you to ${bestPlayer || 'a top player'}. Is there any truth to it?`,
+      options: [
+        { id: 'a', label: 'Confirm interest',  text: `"${bestPlayer || 'The player in question'} is someone we have been monitoring closely. No further comment."`, effect: { type: 'none' } },
+        { id: 'b', label: 'Flat denial',       text: `"We have no interest in that position at this time. The report is inaccurate."`,                              effect: { type: 'none' } },
+        { id: 'c', label: 'No comment',        text: `"We never comment on potential portfolio moves before they're made."`,                                        effect: { type: 'none' } },
+      ],
+    },
+    // — Insider tip accusation
+    {
+      sender: 'The Athletic', subject: `Insider trading allegation — your response?`,
+      body: `The Athletic's investigative desk has received a tip suggesting your recent trades may have been made on non-public information.\n\nThey're giving you the opportunity to respond before publishing. The journalist stresses this is standard practice and does not imply wrongdoing.`,
+      question: `The Athletic is asking about "unusual trading patterns" in your recent matchdays. How do you respond?`,
+      options: [
+        { id: 'a', label: 'Deny any wrongdoing',  text: `"Our trades are entirely based on publicly available data and our own scouting network. We have nothing to hide."`, effect: { type: 'none' } },
+        { id: 'b', label: 'Threaten legal action', text: `"This allegation is defamatory. Our legal team will be in touch before any publication."`,                          effect: { type: 'none' } },
+        { id: 'c', label: 'Refuse to engage',     text: `"We don't respond to fishing expeditions. Publish what you like."`,                                                effect: { type: 'none' } },
+      ],
+    },
+  ]
+
+  return pick(scenarios)
+}
+
 // ── Edge Function ────────────────────────────────────────────────────────────
 
 Deno.serve(async (req) => {
@@ -769,6 +849,24 @@ Deno.serve(async (req) => {
           preview, body,
           metadata: { matchday, valueBefore, valueAfter, change, invested, dividends: divs },
         })
+
+        // 60% chance of an interview request alongside the portfolio summary
+        if (Math.random() < 0.6) {
+          const iv = pickInterview(matchday, change, bestName)
+          summaryMessages.push({
+            user_id: userId, type: 'interview', sender: iv.sender,
+            subject: iv.subject,
+            preview: iv.question,
+            body: iv.body,
+            metadata: {
+              question: iv.question,
+              options: iv.options,
+              responded: false,
+              chosen_option: null,
+              matchday,
+            },
+          })
+        }
       }
 
       if (summaryMessages.length) await supabase.from('inbox_messages').insert(summaryMessages)
