@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthContext'
@@ -38,17 +38,66 @@ function FlashPrice({ price, changeDir }) {
   )
 }
 
-function LivePlayerCard({ player, stats, livePrice, changePct, owned, onClick }) {
+// Flashes the stats row background the first time it appears (realtime reveal only)
+function StatSection({ stats, position, flashOnMount }) {
+  const ref = useRef(null)
+  useLayoutEffect(() => {
+    if (!flashOnMount || !ref.current) return
+    const el = ref.current
+    el.classList.add('live-flash-bg-green')
+    const t = setTimeout(() => el.classList.remove('live-flash-bg-green'), 1100)
+    return () => clearTimeout(t)
+  }, []) // intentionally fires once on mount only
+
+  return (
+    <div ref={ref} className="mt-2 pt-2 border-t border-[#1e2330] grid grid-cols-3 gap-1 text-center">
+      {stats.minutes === 0 ? (
+        <div className="col-span-3 text-[10px] text-orange-400">DNP — {stats.dnp_reason}</div>
+      ) : position !== 'Goalkeeper' ? (
+        <>
+          <Stat label="G" value={stats.goals}/>
+          <Stat label="A" value={stats.assists}/>
+          <Stat label="⭐" value={stats.rating?.toFixed(1) ?? '—'}/>
+        </>
+      ) : (
+        <>
+          <Stat label="Sv" value={stats.saves}/>
+          <Stat label="CS" value={stats.clean_sheet ? '✓' : '✗'} color={stats.clean_sheet ? 'text-green-400' : 'text-gray-500'}/>
+          <Stat label="⭐" value={stats.rating?.toFixed(1) ?? '—'}/>
+        </>
+      )}
+    </div>
+  )
+}
+
+function LivePlayerCard({ player, stats, livePrice, changePct, owned, flashStats, onClick }) {
   const isUp   = (changePct ?? 0) > 0
   const isDown = (changePct ?? 0) < 0
   const hasStats = stats !== null
 
+  // Flash card border on price change
+  const [pricePulse, setPricePulse] = useState(null)
+  const prevPriceRef = useRef(livePrice ?? player.current_price)
+  useEffect(() => {
+    const cur = livePrice ?? player.current_price
+    if (cur !== prevPriceRef.current) {
+      setPricePulse(cur > prevPriceRef.current ? 'up' : 'down')
+      prevPriceRef.current = cur
+      const t = setTimeout(() => setPricePulse(null), 700)
+      return () => clearTimeout(t)
+    }
+  }, [livePrice])
+
+  const borderClass =
+    pricePulse === 'up'   ? 'border-green-400/80' :
+    pricePulse === 'down' ? 'border-red-400/80'   :
+    owned                 ? 'border-green-500/40 hover:border-green-500/60' :
+                            'border-[#1e2330] hover:border-gray-600'
+
   return (
     <div
       onClick={onClick}
-      className={`bg-[#111318] rounded-lg p-3 cursor-pointer transition-all hover:bg-[#161a21] border ${
-        owned ? 'border-green-500/40 hover:border-green-500/60' : 'border-[#1e2330] hover:border-gray-600'
-      }`}
+      className={`bg-[#111318] rounded-lg p-3 cursor-pointer transition-all hover:bg-[#161a21] border transition-colors duration-150 ${borderClass}`}
     >
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2 min-w-0">
@@ -89,23 +138,11 @@ function LivePlayerCard({ player, stats, livePrice, changePct, owned, onClick })
       </div>
 
       {hasStats && (
-        <div className="mt-2 pt-2 border-t border-[#1e2330] grid grid-cols-3 gap-1 text-center">
-          {stats.minutes === 0 ? (
-            <div className="col-span-3 text-[10px] text-orange-400">DNP — {stats.dnp_reason}</div>
-          ) : player.position !== 'Goalkeeper' ? (
-            <>
-              <Stat label="G" value={stats.goals}/>
-              <Stat label="A" value={stats.assists}/>
-              <Stat label="⭐" value={stats.rating?.toFixed(1) ?? '—'}/>
-            </>
-          ) : (
-            <>
-              <Stat label="Sv" value={stats.saves}/>
-              <Stat label="CS" value={stats.clean_sheet ? '✓' : '✗'} color={stats.clean_sheet ? 'text-green-400' : 'text-gray-500'}/>
-              <Stat label="⭐" value={stats.rating?.toFixed(1) ?? '—'}/>
-            </>
-          )}
-        </div>
+        <StatSection
+          stats={stats}
+          position={player.position}
+          flashOnMount={flashStats}
+        />
       )}
     </div>
   )
@@ -237,6 +274,8 @@ export default function Live() {
   const [sort, setSort] = useState('Biggest movers')
   const [selectedPlayer, setSelectedPlayer] = useState(null)
   const [tick, setTick] = useState(Date.now())
+  // Track which player IDs had stats on initial load — only flash cards that arrive via realtime
+  const initialStatsRef = useRef(null)
 
   // ─── Fetch initial data ─────────────────────────────────────
   useEffect(() => {
@@ -260,6 +299,7 @@ export default function Live() {
 
       const sMap = {}
       for (const s of (statsRes.data ?? [])) sMap[s.player_id] = s
+      initialStatsRef.current = new Set(Object.keys(sMap))
       setLiveStats(sMap)
 
       const pMap = {}, cMap = {}
@@ -445,6 +485,7 @@ export default function Live() {
                     livePrice={livePrices[player.id]}
                     changePct={liveChanges[player.id]}
                     owned={portfolio.has(player.id)}
+                    flashStats={liveStats[player.id] != null && !initialStatsRef.current?.has(player.id)}
                     onClick={() => setSelectedPlayer(player)}
                   />
                 ))}
