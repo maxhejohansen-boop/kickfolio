@@ -248,12 +248,12 @@ async function runLiveMatchday(matchday: number, players: Record<string, unknown
     console.log(`[Live] Wave ${wave + 1}/${WAVES}: ${batch.length} players`)
 
     const inserts: Promise<unknown>[] = []
+    const minute = waveMinute(wave)  // one minute per wave, so all events in the wave share the same match time
 
     for (const { player, stat } of batch) {
       const oldPrice = Number(player.current_price)
       const chg = stat.price_change_pct as number
       const newPrice = parseFloat(Math.max(0.5, oldPrice * (1 + chg / 100)).toFixed(2))
-      const minute = waveMinute(wave)
 
       inserts.push(
         supabase.from('players').update({ current_price: newPrice }).eq('id', player.id)

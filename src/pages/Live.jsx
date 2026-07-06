@@ -38,7 +38,7 @@ function FlashPrice({ price, changeDir }) {
   )
 }
 
-function LivePlayerCard({ player, stats, livePrice, changePct, onClick }) {
+function LivePlayerCard({ player, stats, livePrice, changePct, owned, onClick }) {
   const isUp   = (changePct ?? 0) > 0
   const isDown = (changePct ?? 0) < 0
   const hasStats = stats !== null
@@ -46,28 +46,33 @@ function LivePlayerCard({ player, stats, livePrice, changePct, onClick }) {
   return (
     <div
       onClick={onClick}
-      className="bg-[#111318] border border-[#1e2330] hover:border-gray-600 rounded-lg p-3 cursor-pointer transition-all hover:bg-[#161a21]"
+      className={`bg-[#111318] rounded-lg p-3 cursor-pointer transition-all hover:bg-[#161a21] border ${
+        owned ? 'border-green-500/40 hover:border-green-500/60' : 'border-[#1e2330] hover:border-gray-600'
+      }`}
     >
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2 min-w-0">
-          <div className="w-8 h-8 rounded-full bg-[#1e2330] overflow-hidden flex-shrink-0">
+          <div className={`w-8 h-8 rounded-full overflow-hidden flex-shrink-0 ${owned ? 'ring-1 ring-green-500/40' : 'bg-[#1e2330]'}`}>
             {player.image_url
               ? <img src={player.image_url} alt={player.name} className="w-full h-full object-cover" onError={e => { e.target.style.display = 'none' }}/>
-              : <div className="w-full h-full flex items-center justify-center text-gray-500 text-sm">{player.name[0]}</div>
+              : <div className="w-full h-full flex items-center justify-center text-gray-500 text-sm bg-[#1e2330]">{player.name[0]}</div>
             }
           </div>
           <div className="min-w-0">
-            <div className="text-white text-xs font-semibold truncate">{player.name}</div>
+            <div className={`text-xs font-semibold truncate ${owned ? 'text-green-400' : 'text-white'}`}>{player.name}</div>
             <div className="text-gray-600 text-[10px]">{player.club}</div>
           </div>
         </div>
-        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded bg-[#1e2330] ${
-          player.position === 'Forward'    ? 'text-orange-400' :
-          player.position === 'Midfielder' ? 'text-blue-400'   :
-          player.position === 'Defender'   ? 'text-purple-400' : 'text-yellow-400'
-        }`}>
-          {player.position === 'Goalkeeper' ? 'GK' : player.position.slice(0, 3).toUpperCase()}
-        </span>
+        <div className="flex flex-col items-end gap-0.5 flex-shrink-0">
+          {owned && <span className="text-[8px] font-bold text-green-500/80 uppercase tracking-wider leading-none">owned</span>}
+          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded bg-[#1e2330] ${
+            player.position === 'Forward'    ? 'text-orange-400' :
+            player.position === 'Midfielder' ? 'text-blue-400'   :
+            player.position === 'Defender'   ? 'text-purple-400' : 'text-yellow-400'
+          }`}>
+            {player.position === 'Goalkeeper' ? 'GK' : player.position.slice(0, 3).toUpperCase()}
+          </span>
+        </div>
       </div>
 
       <div className="flex items-end justify-between">
@@ -439,6 +444,7 @@ export default function Live() {
                     stats={liveStats[player.id] ?? null}
                     livePrice={livePrices[player.id]}
                     changePct={liveChanges[player.id]}
+                    owned={portfolio.has(player.id)}
                     onClick={() => setSelectedPlayer(player)}
                   />
                 ))}
