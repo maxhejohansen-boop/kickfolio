@@ -241,24 +241,34 @@ async function runLiveMatchday(matchday: number, players: Record<string, unknown
   const WAVES = 5
   const waveSize = Math.ceil(allStats.length / WAVES)
 
+  // Small buffer before wave 0 so users can load the live page first
+  await delay(5_000)
+
   for (let wave = 0; wave < WAVES; wave++) {
     if (wave > 0) await delay(60_000)
 
     const batch = allStats.slice(wave * waveSize, (wave + 1) * waveSize)
-    console.log(`[Live] Wave ${wave + 1}/${WAVES}: ${batch.length} players`)
+    const lo = wave * 18 + 1
+    const hi = Math.min(90, (wave + 1) * 18)
+    console.log(`[Live] Wave ${wave + 1}/${WAVES}: ${batch.length} players (${lo}'–${hi}')`)
 
-    const inserts: Promise<unknown>[] = []
-    const minute = waveMinute(wave)  // one minute per wave, so all events in the wave share the same match time
+    // Phase 1: update prices + stats + price ticks concurrently
+    const updates: Promise<unknown>[] = []
+    const eventQueue: Array<{ player_id: string; price: number; chg: number; text: string }> = []
 
-    for (const { player, stat } of batch) {
+    for (let i = 0; i < batch.length; i++) {
+      const { player, stat } = batch[i]
       const oldPrice = Number(player.current_price)
       const chg = stat.price_change_pct as number
       const newPrice = parseFloat(Math.max(0.5, oldPrice * (1 + chg / 100)).toFixed(2))
+      // Spread minutes evenly across the wave range based on position in shuffled batch
+      const fraction = batch.length > 1 ? i / (batch.length - 1) : 0.5
+      const minute = Math.round(lo + fraction * (hi - lo))
 
-      inserts.push(
+      updates.push(
         supabase.from('players').update({ current_price: newPrice }).eq('id', player.id)
       )
-      inserts.push(
+      updates.push(
         supabase.from('matchday_stats').insert({
           player_id: player.id,
           matchday,
@@ -272,17 +282,32 @@ async function runLiveMatchday(matchday: number, players: Record<string, unknown
           price_change_pct: chg,
         })
       )
-      inserts.push(
+      // Price-only tick fires immediately so cards flash and update live
+      updates.push(
         supabase.from('live_ticks').insert({
           player_id: player.id,
           price: newPrice,
           price_change_pct: chg,
-          event_text: eventText(player.name as string, { ...stat, price_change_pct: chg }, newPrice, wave, minute),
+          event_text: null,
         })
       )
+
+      const text = eventText(player.name as string, { ...stat, price_change_pct: chg }, newPrice, wave, minute)
+      if (text) eventQueue.push({ player_id: player.id as string, price: newPrice, chg, text })
     }
 
-    await Promise.all(inserts)
+    await Promise.all(updates)
+
+    // Phase 2: insert event ticks sequentially so feed events trickle in one by one
+    for (const ev of eventQueue) {
+      await delay(1_500)
+      await supabase.from('live_ticks').insert({
+        player_id: ev.player_id,
+        price: ev.price,
+        price_change_pct: ev.chg,
+        event_text: ev.text,
+      })
+    }
   }
 
   // Wait out the remaining window
