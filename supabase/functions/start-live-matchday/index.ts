@@ -234,7 +234,8 @@ async function runLiveMatchday(matchday: number, players: Record<string, unknown
   await supabase.from('matchday_status').update({ status: 'completed' }).eq('id', 1)
 
   // Pay dividends
-  const { data: portfolios } = await supabase.from('portfolios').select('user_id, player_id, shares').gt('shares', 0)
+  const { data: portfolios } = await supabase.from('portfolios').select('user_id, player_id, shares, avg_buy_price').gt('shares', 0)
+  const userDividendTotals = new Map<string, number>()
   if (portfolios?.length) {
     const byPlayer = new Map<string, { user_id: string; shares: number }[]>()
     for (const p of portfolios) {
@@ -243,7 +244,6 @@ async function runLiveMatchday(matchday: number, players: Record<string, unknown
     }
     const playerPositions = new Map(players.map(p => [p.id as string, p.position as string]))
     const statsByPlayer = new Map(allStats.map(({ player, stat }) => [player.id as string, { ...stat, position: player.position as string }]))
-    const userTotals = new Map<string, number>()
     const divInserts: Record<string, unknown>[] = []
 
     for (const [playerId, holders] of byPlayer) {
@@ -255,13 +255,13 @@ async function runLiveMatchday(matchday: number, players: Record<string, unknown
       for (const { user_id, shares } of holders) {
         const total = parseFloat((dpShare * shares).toFixed(2))
         if (total <= 0) continue
-        userTotals.set(user_id, (userTotals.get(user_id) ?? 0) + total)
+        userDividendTotals.set(user_id, (userDividendTotals.get(user_id) ?? 0) + total)
         divInserts.push({ user_id, player_id: playerId, matchday, shares, dividend_per_share: dpShare, total_payment: total })
       }
     }
     if (divInserts.length) {
       await supabase.from('dividend_payments').insert(divInserts)
-      for (const [userId, total] of userTotals) {
+      for (const [userId, total] of userDividendTotals) {
         const { data: u } = await supabase.from('users').select('balance').eq('id', userId).single()
         if (u) await supabase.from('users').update({ balance: (u as any).balance + total }).eq('id', userId)
       }
@@ -428,6 +428,79 @@ async function runLiveMatchday(matchday: number, players: Record<string, unknown
   }
 
   if (inboxMessages.length) await supabase.from('inbox_messages').insert(inboxMessages)
+
+  // Portfolio summaries
+  if (portfolios?.length) {
+    const playerMap = new Map(players.map((p: any) => [p.id as string, p]))
+    const statsByPlayer2 = new Map(allStats.map(({ player, stat }: any) => [player.id as string, stat]))
+    const userPortfolioMap = new Map<string, any[]>()
+    for (const h of portfolios) {
+      if (!userPortfolioMap.has(h.user_id)) userPortfolioMap.set(h.user_id, [])
+      userPortfolioMap.get(h.user_id)!.push(h)
+    }
+    const { data: finalPrices } = await supabase.from('players').select('id, current_price')
+    const newPriceMap = new Map((finalPrices ?? []).map((p: any) => [p.id, Number(p.current_price)]))
+    const summaryMessages: Record<string, unknown>[] = []
+
+    for (const [userId, holdings] of userPortfolioMap) {
+      let valueBefore = 0, valueAfter = 0, invested = 0
+      let bestRating = -1, bestName = ''
+      const rows: string[] = []
+
+      for (const h of holdings) {
+        const p = playerMap.get(h.player_id) as any
+        if (!p) continue
+        const stat    = statsByPlayer2.get(h.player_id as string) as any
+        const g       = stat?.goals   ?? 0
+        const a       = stat?.assists ?? 0
+        const r       = Number(stat?.rating ?? 0)
+        const mins    = Number(stat?.minutes ?? 0)
+        const oldPx   = Number(p.current_price ?? 0)
+        const newPx   = newPriceMap.get(h.player_id as string) ?? oldPx
+        const posAbbr = (p.position as string) === 'Forward' ? 'FWD' : (p.position as string) === 'Midfielder' ? 'MID' : (p.position as string) === 'Defender' ? 'DEF' : ' GK'
+        const statsStr = mins === 0 ? 'DNP            ' : `${g}G ${a}A  ★${r.toFixed(1)}`.padEnd(15)
+        const chg = newPx - oldPx
+        const chgStr = (chg >= 0 ? '+' : '') + '£' + Math.abs(chg).toFixed(2)
+        rows.push(`  ${(p.name as string).padEnd(23).slice(0, 23)} ${posAbbr}  ${statsStr}  ${chgStr}/share`)
+        valueBefore += (h.shares as number) * oldPx
+        valueAfter  += (h.shares as number) * newPx
+        invested    += (h.shares as number) * Number(h.avg_buy_price ?? oldPx)
+        if (r > bestRating && mins > 0) { bestRating = r; bestName = p.name as string }
+      }
+
+      const change    = valueAfter - valueBefore
+      const changePct = valueBefore > 0 ? (change / valueBefore) * 100 : 0
+      const totalPL   = valueAfter - invested
+      const totalPct  = invested > 0 ? (totalPL / invested) * 100 : 0
+      const divs      = userDividendTotals.get(userId) ?? 0
+      const sign      = (n: number) => n >= 0 ? '+' : ''
+      const fmt       = (n: number) => n.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+      let body = `MATCHDAY ${matchday} · PORTFOLIO SUMMARY\n`
+      body += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`
+      body += `YOUR PLAYERS\n\n` + rows.join('\n')
+      body += `\n\nMATCHDAY P&L\n\n`
+      body += `  Value before:  £${fmt(valueBefore)}\n`
+      body += `  Value after:   £${fmt(valueAfter)}\n`
+      body += `  Change:        ${sign(change)}£${fmt(Math.abs(change))} (${sign(changePct)}${changePct.toFixed(2)}%)\n\n`
+      body += `OVERALL P&L\n\n`
+      body += `  Total invested:  £${fmt(invested)}\n`
+      body += `  Portfolio value: £${fmt(valueAfter)}\n`
+      body += `  Net P&L:         ${sign(totalPL)}£${fmt(Math.abs(totalPL))} (${sign(totalPct)}${totalPct.toFixed(1)}%)`
+      if (divs > 0) body += `\n  Dividends MD${matchday}: +£${divs.toFixed(2)}`
+      if (bestName) body += `\n\nStar player: ${bestName}  ★ ${bestRating.toFixed(1)}`
+
+      const preview = `${sign(change)}£${Math.abs(change).toFixed(2)} (${sign(changePct)}${changePct.toFixed(2)}%) this matchday  ·  ${holdings.length} player${holdings.length === 1 ? '' : 's'} held`
+
+      summaryMessages.push({
+        user_id: userId, type: 'news', sender: 'Portfolio Desk',
+        subject: `MD${matchday} Portfolio Summary`,
+        preview, body,
+        metadata: { matchday, valueBefore, valueAfter, change, invested, dividends: divs },
+      })
+    }
+    if (summaryMessages.length) await supabase.from('inbox_messages').insert(summaryMessages)
+  }
 
   console.log(`[Live] Matchday ${matchday} completed.`)
 }
