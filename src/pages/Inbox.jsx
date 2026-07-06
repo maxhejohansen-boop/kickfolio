@@ -118,11 +118,11 @@ const TYPE_META = {
 const TABS = [
   { key: 'all',          label: 'All' },
   { key: 'unread',       label: 'Unread' },
-  { key: 'interview',    label: 'Media' },
   { key: 'scout_report', label: 'Reports' },
   { key: 'tip',          label: 'Tips' },
   { key: 'news',         label: 'News' },
   { key: 'bill',         label: 'Bills' },
+  // { key: 'interview', label: 'Media' }, // DISABLED: interview feature
 ]
 
 function msgTime(ts) {
@@ -370,17 +370,18 @@ export default function Inbox() {
               <p className="text-gray-300 text-sm leading-7 whitespace-pre-line">
                 {selected.body}
               </p>
+              {/* DISABLED: interview feature
               {selected.type === 'interview' && (
                 <InterviewPanel
                   message={selected}
                   onRespond={handleInterviewResponse}
                 />
               )}
+              */}
             </div>
           </div>
 
-          {/* Action bar — hidden for interviews (options are inline) */}
-          {selected.type !== 'interview' && (
+          {/* Action bar */}
           <div className="flex-shrink-0 border-t border-[#1e2330] bg-[#111318] px-6 py-3 flex items-center gap-3">
             <span className="text-gray-600 text-xs font-medium uppercase tracking-wider">Action</span>
             <div className="w-px h-4 bg-[#1e2330]" />
@@ -409,7 +410,6 @@ export default function Inbox() {
               </Link>
             )}
           </div>
-          )}
         </div>
       ) : (
         <div className="hidden lg:flex flex-1 items-center justify-center bg-[#0d0e13]">

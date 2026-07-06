@@ -850,23 +850,23 @@ Deno.serve(async (req) => {
           metadata: { matchday, valueBefore, valueAfter, change, invested, dividends: divs },
         })
 
-        // 60% chance of an interview request alongside the portfolio summary
-        if (Math.random() < 0.6) {
-          const iv = pickInterview(matchday, change, bestName)
-          summaryMessages.push({
-            user_id: userId, type: 'interview', sender: iv.sender,
-            subject: iv.subject,
-            preview: iv.question,
-            body: iv.body,
-            metadata: {
-              question: iv.question,
-              options: iv.options,
-              responded: false,
-              chosen_option: null,
-              matchday,
-            },
-          })
-        }
+        // DISABLED: interview/media request feature — uncomment to re-enable
+        // if (Math.random() < 0.6) {
+        //   const iv = pickInterview(matchday, change, bestName)
+        //   summaryMessages.push({
+        //     user_id: userId, type: 'interview', sender: iv.sender,
+        //     subject: iv.subject,
+        //     preview: iv.question,
+        //     body: iv.body,
+        //     metadata: {
+        //       question: iv.question,
+        //       options: iv.options,
+        //       responded: false,
+        //       chosen_option: null,
+        //       matchday,
+        //     },
+        //   })
+        // }
       }
 
       if (summaryMessages.length) await supabase.from('inbox_messages').insert(summaryMessages)
