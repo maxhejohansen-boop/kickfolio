@@ -2,9 +2,14 @@ import { useState, useEffect } from 'react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from 'recharts'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthContext'
+import { useTutorial } from '../lib/TutorialContext'
+import { GRADE_META, STAKE_PCT } from '../lib/gradeCalc'
 
-export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'buy', showActionsTab = false }) {
+const SCOUT_COST = 500
+
+export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'buy', showActionsTab = false, gradeData = null, isLive = false, liveChangePct = null, liveMatchStats = null, onScoutUpdate }) {
   const { user, userRecord, refreshUserRecord } = useAuth()
+  const tutorial = useTutorial()
   const [priceByMatchday, setPriceByMatchday] = useState({})
   const [recentChart, setRecentChart] = useState([])
   const [allStats, setAllStats] = useState([])
@@ -14,6 +19,10 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState(null)
   const [activeTab, setActiveTab] = useState(showActionsTab ? 'actions' : 'overview')
+  const [scoutInfo, setScoutInfo] = useState(null)
+  const [scoutLoading, setScoutLoading] = useState(false)
+  const [scoutMessage, setScoutMessage] = useState(null)
+  const [currentMatchday, setCurrentMatchday] = useState(0)
 
   // Limit order state
   const [limitOrders, setLimitOrders] = useState([])
@@ -30,7 +39,7 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
   }, [player.id])
 
   async function fetchData() {
-    const [historyRes, holdingRes, statsRes, limitRes] = await Promise.all([
+    const [historyRes, holdingRes, statsRes, limitRes, scoutRes, mdRes] = await Promise.all([
       supabase
         .from('price_history')
         .select('price, matchday')
@@ -58,6 +67,10 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
             .eq('status', 'pending')
             .order('created_at', { ascending: false })
         : Promise.resolve({ data: [] }),
+      user
+        ? supabase.from('player_scouts').select('*').eq('user_id', user.id).eq('player_id', player.id).maybeSingle()
+        : Promise.resolve({ data: null }),
+      supabase.from('matchday_tracker').select('current_matchday').eq('id', 1).maybeSingle(),
     ])
 
     const priceMap = Object.fromEntries(
@@ -66,6 +79,8 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
     setPriceByMatchday(priceMap)
     setHolding(holdingRes.data)
     setLimitOrders(limitRes.data ?? [])
+    setScoutInfo(scoutRes.data)
+    setCurrentMatchday(mdRes.data?.current_matchday ?? 0)
 
     const stats = statsRes.data ?? []
     setAllStats(stats)
@@ -125,6 +140,7 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
         if (portErr) throw portErr
 
         setMessage({ type: 'success', text: `Bought ${qty} share${qty > 1 ? 's' : ''} for £${cost.toFixed(2)}` })
+        tutorial?.onTradeCompleted()
       } else {
         const currentShares = holding?.shares ?? 0
         if (qty > currentShares) {
@@ -208,6 +224,53 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
     await fetchData()
   }
 
+  // ─── Scout helpers ────────────────────────────────────────────
+  const scoutRevealed = scoutInfo?.scout_type === 'instant' ||
+    (scoutInfo?.scout_type === 'sent' && scoutInfo.reveals_at_matchday != null && scoutInfo.reveals_at_matchday <= currentMatchday)
+  const scoutPending = scoutInfo?.scout_type === 'sent' && !scoutRevealed
+
+  async function handleScoutNow() {
+    if (!user || !userRecord) return
+    if (userRecord.balance < SCOUT_COST) {
+      setScoutMessage({ type: 'error', text: `Need £${SCOUT_COST} to scout instantly.` })
+      return
+    }
+    setScoutLoading(true); setScoutMessage(null)
+    try {
+      await supabase.from('users').update({ balance: userRecord.balance - SCOUT_COST }).eq('id', user.id)
+      const { data, error } = await supabase
+        .from('player_scouts')
+        .upsert({ user_id: user.id, player_id: player.id, scout_type: 'instant', reveals_at_matchday: null }, { onConflict: 'user_id,player_id' })
+        .select().single()
+      if (error) throw error
+      setScoutInfo(data)
+      onScoutUpdate?.(player.id, data)
+      await refreshUserRecord()
+    } catch (err) {
+      setScoutMessage({ type: 'error', text: err.message })
+    } finally {
+      setScoutLoading(false)
+    }
+  }
+
+  async function handleSendScouts() {
+    if (!user) return
+    setScoutLoading(true); setScoutMessage(null)
+    try {
+      const { data, error } = await supabase
+        .from('player_scouts')
+        .upsert({ user_id: user.id, player_id: player.id, scout_type: 'sent', reveals_at_matchday: currentMatchday + 1 }, { onConflict: 'user_id,player_id' })
+        .select().single()
+      if (error) throw error
+      setScoutInfo(data)
+      onScoutUpdate?.(player.id, data)
+    } catch (err) {
+      setScoutMessage({ type: 'error', text: err.message })
+    } finally {
+      setScoutLoading(false)
+    }
+  }
+
   const isGK = player.position === 'Goalkeeper'
   const played = allStats.filter(s => s.minutes > 0)
   const appearances = played.length
@@ -226,6 +289,17 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
   const lastChangeAmt = lastChangePct !== 0
     ? player.current_price - player.current_price / (1 + lastChangePct / 100)
     : 0
+
+  // Price at the end of the most recent completed matchday — used to compute
+  // overall change = live change + any accumulated prior-matchday change.
+  const prevMatchdayPrice = (() => {
+    const keys = Object.keys(priceByMatchday).map(Number)
+    if (keys.length === 0) return null
+    return priceByMatchday[Math.max(...keys)]
+  })()
+  const overallChangePct = isLive && liveChangePct != null && prevMatchdayPrice != null
+    ? ((player.current_price - prevMatchdayPrice) / prevMatchdayPrice) * 100
+    : null
 
   const PerformanceTooltip = ({ active, payload }) => {
     if (!active || !payload?.length) return null
@@ -285,11 +359,151 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
     )
   }
 
-  const ratingMin = recentChart.length ? Math.max(0, Math.min(...recentChart.map(d => d.rating)) - 1) : 0
-  const ratingMax = recentChart.length ? Math.min(10, Math.max(...recentChart.map(d => d.rating)) + 1) : 10
+  const validRatings = recentChart.map(d => d.rating).filter(r => r != null)
+  const ratingMin = validRatings.length ? Math.max(0, Math.min(...validRatings) - 1) : 0
+  const ratingMax = validRatings.length ? Math.min(10, Math.max(...validRatings) + 1) : 10
+
+  const gradeBreakdown = gradeData && (() => {
+    // Locked state: not scouted at all
+    if (!scoutRevealed) {
+      return (
+        <div className="bg-[#1a1f28] border border-[#1e2330] rounded-xl p-4">
+          {scoutPending ? (
+            <div className="text-center py-1">
+              <div className="text-3xl mb-2">⏱</div>
+              <div className="text-white font-semibold text-sm mb-1">Scouts en route</div>
+              <div className="text-xs text-gray-500">Report arrives after matchday {scoutInfo.reveals_at_matchday}</div>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-3 mb-4">
+                <span className="text-lg font-bold w-9 h-9 flex items-center justify-center rounded-lg bg-[#1e2330] text-gray-600">?</span>
+                <div>
+                  <div className="text-white font-semibold text-sm">Grade hidden</div>
+                  <div className="text-xs text-gray-500 mt-0.5">Scout to reveal this player's value assessment</div>
+                </div>
+              </div>
+              {!user ? (
+                <div className="text-xs text-gray-500 text-center py-1">
+                  <a href="/login" className="text-green-400 hover:underline">Sign in</a> to scout players
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={handleSendScouts}
+                    disabled={scoutLoading}
+                    className="py-3 rounded-lg border border-[#1e2330] hover:border-gray-500 text-center transition-colors disabled:opacity-50 group"
+                  >
+                    <div className="text-sm font-medium text-gray-300 group-hover:text-white">Send scouts</div>
+                    <div className="text-xs text-gray-600 mt-0.5">Free · next matchday</div>
+                  </button>
+                  <button
+                    onClick={handleScoutNow}
+                    disabled={scoutLoading || (userRecord?.balance ?? 0) < SCOUT_COST}
+                    className="py-3 rounded-lg bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20 text-center transition-colors disabled:opacity-40"
+                  >
+                    <div className="text-sm font-medium text-amber-400">Scout now</div>
+                    <div className="text-xs text-amber-600 mt-0.5">£{SCOUT_COST} · instant</div>
+                  </button>
+                </div>
+              )}
+              {scoutMessage && (
+                <div className={`mt-2 text-xs rounded-lg px-3 py-2 ${scoutMessage.type === 'error' ? 'bg-red-500/10 text-red-400' : 'bg-green-500/10 text-green-400'}`}>
+                  {scoutMessage.text}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )
+    }
+
+    // Revealed state: normal grade breakdown
+    const meta = GRADE_META[gradeData.grade]
+    const liveBalance = userRecord?.balance ?? 0
+    const suggested = gradeData.grade !== 'D' && liveBalance > 0
+      ? liveBalance * STAKE_PCT[gradeData.grade]
+      : 0
+    const diff = gradeData.priceDiff
+    return (
+      <div className="bg-[#1a1f28] border border-[#1e2330] rounded-xl p-4">
+        <div className="flex items-center gap-2.5 mb-3">
+          <span className={`text-xs font-bold px-2 py-1 rounded ${meta.pillClass}`}>{gradeData.grade}</span>
+          <span className="text-white font-semibold text-sm">{meta.label}</span>
+        </div>
+        <div className="space-y-2.5 text-xs">
+          <div className="flex justify-between items-center">
+            <span className="text-gray-500">Current price</span>
+            <span className="text-white font-medium">£{Number(player.current_price).toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between items-center">
+            <span className="text-gray-500">Expected price</span>
+            <span className={`font-medium ${diff >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+              £{gradeData.expectedPrice.toFixed(2)}
+              <span className="ml-1 opacity-70">({diff >= 0 ? '+' : ''}{diff.toFixed(1)}%)</span>
+            </span>
+          </div>
+          <div className="flex justify-between items-center">
+            <span className="text-gray-500">Availability (last {gradeData.matchdays} MD)</span>
+            <span className={`font-medium ${gradeData.minutesPct >= 0.8 ? 'text-green-400' : gradeData.minutesPct < 0.4 ? 'text-red-400' : 'text-gray-300'}`}>
+              {Math.round(gradeData.minutesPct * 100)}%
+            </span>
+          </div>
+          {suggested >= 1 && (
+            <div className="flex justify-between items-center pt-2 border-t border-[#1e2330]">
+              <span className="text-gray-500">Suggested stake ({Math.round(STAKE_PCT[gradeData.grade] * 100)}% of cash)</span>
+              <span className="text-green-400 font-semibold">£{suggested.toFixed(2)}</span>
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  })()
 
   const overviewContent = (
     <div className="space-y-5">
+
+      {/* Live match stats — shown when modal opened from the live page */}
+      {isLive && liveMatchStats && liveMatchStats.minutes > 0 && (
+        <div className="bg-red-500/[0.06] border border-red-500/20 rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
+            <span className="text-xs font-semibold text-red-400 uppercase tracking-wider">Live this match</span>
+            {liveMatchStats.rating != null && (
+              <span className={`ml-auto text-sm font-bold ${
+                liveMatchStats.rating >= 8 ? 'text-green-400' : liveMatchStats.rating >= 7 ? 'text-gray-200' : liveMatchStats.rating >= 6 ? 'text-orange-400' : 'text-red-400'
+              }`}>{Number(liveMatchStats.rating).toFixed(1)} rating</span>
+            )}
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <StatPill label="Minutes" value={`${liveMatchStats.minutes}'`} />
+            {isGK ? (
+              <>
+                <StatPill label="Saves" value={liveMatchStats.saves ?? 0} />
+                <StatPill label="Clean sheet" value={liveMatchStats.clean_sheet ? '✓' : '✗'} highlight={liveMatchStats.clean_sheet} />
+              </>
+            ) : (
+              <>
+                <StatPill label="Goals" value={liveMatchStats.goals ?? 0} highlight={(liveMatchStats.goals ?? 0) > 0} />
+                <StatPill label="Assists" value={liveMatchStats.assists ?? 0} highlight={(liveMatchStats.assists ?? 0) > 0} />
+              </>
+            )}
+          </div>
+          {liveChangePct != null && (
+            <div className="mt-3 pt-3 border-t border-red-500/10 flex justify-between items-center text-xs">
+              <span className="text-gray-600">Price movement this match</span>
+              <span className={`font-bold ${liveChangePct > 0 ? 'text-green-400' : liveChangePct < 0 ? 'text-red-400' : 'text-gray-500'}`}>
+                {liveChangePct > 0 ? '+' : ''}{Number(liveChangePct).toFixed(2)}%
+                <span className="text-gray-600 font-normal ml-1">
+                  (£{Math.abs(player.current_price - player.current_price / (1 + liveChangePct / 100)).toFixed(2)})
+                </span>
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {gradeBreakdown}
       <div className="grid grid-cols-4 gap-3">
         <StatPill label="Apps" value={appearances} />
         {isGK ? (
@@ -516,21 +730,40 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
       <div className="bg-[#111318] border border-[#1e2330] rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-[#1e2330]">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-full bg-[#1e2330] overflow-hidden">
-              {player.image_url && (
-                <img src={player.image_url} alt={player.name} className="w-full h-full object-cover" onError={e => { e.target.style.display = 'none' }} />
+          <div className="flex items-center gap-4">
+            <div className="w-20 h-20 rounded-xl bg-[#1e2330] overflow-hidden flex-shrink-0 flex items-center justify-center">
+              {player.image_url ? (
+                <img src={player.image_url} alt={player.name} className="w-full h-full object-cover object-top" onError={e => { e.target.style.display = 'none' }} />
+              ) : (
+                <span className="text-gray-500 text-2xl font-semibold">{player.name[0]}</span>
               )}
             </div>
             <div>
-              <h2 className="text-white font-bold text-lg">{player.name}</h2>
-              <div className="text-sm text-gray-500">{player.club} · {player.position}</div>
+              <h2 className="text-white font-bold text-lg leading-tight">{player.name}</h2>
+              <div className="text-sm text-gray-500 mt-0.5">{player.club} · {player.position}</div>
             </div>
           </div>
           <div className="flex items-center gap-4">
             <div className="text-right">
               <div className="text-2xl font-bold text-white">£{Number(player.current_price).toFixed(2)}</div>
-              {lastChangePct !== 0 ? (
+
+              {isLive && liveChangePct != null ? (
+                <div className="mt-1 space-y-0.5">
+                  {/* Live change for this match */}
+                  <div className="flex items-center justify-end gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse flex-shrink-0" />
+                    <span className={`text-sm font-bold ${liveChangePct > 0 ? 'text-green-400' : liveChangePct < 0 ? 'text-red-400' : 'text-gray-400'}`}>
+                      {liveChangePct > 0 ? '+' : ''}{Number(liveChangePct).toFixed(1)}% this match
+                    </span>
+                  </div>
+                  {/* Overall change from prev matchday price */}
+                  {overallChangePct != null && Math.abs(overallChangePct - liveChangePct) > 0.05 && (
+                    <div className={`text-xs ${overallChangePct > 0 ? 'text-green-400/60' : overallChangePct < 0 ? 'text-red-400/60' : 'text-gray-600'}`}>
+                      {overallChangePct > 0 ? '+' : ''}{overallChangePct.toFixed(1)}% since last MD
+                    </div>
+                  )}
+                </div>
+              ) : lastChangePct !== 0 ? (
                 <div className={`text-xs font-medium mt-0.5 ${lastChangePct > 0 ? 'text-green-400' : 'text-red-400'}`}>
                   {lastChangePct > 0 ? '+' : ''}£{Math.abs(lastChangeAmt).toFixed(2)} ({lastChangePct > 0 ? '+' : ''}{lastChangePct.toFixed(1)}%) last match
                 </div>

@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
-import { Navigate } from 'react-router-dom'
+import { Navigate, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthContext'
 
-const SORT_KEYS = { G: 'goals', A: 'assists', Rating: 'rating', Old: 'oldPrice', New: 'newPrice', Change: 'changePct' }
+const SORT_KEYS = { Min: 'minutes', 'G/Sv': 'goals', 'A/CS': 'assists', Rating: 'rating', Old: 'oldPrice', New: 'newPrice', Change: 'changePct' }
 
 function getResult(row) {
   const f = row.fixture
@@ -129,10 +129,13 @@ export default function Admin() {
     try { return JSON.parse(localStorage.getItem('kickfolio_last_matchday') ?? 'null') } catch { return null }
   })
   const [error, setError] = useState(null)
+  const [liveRunning, setLiveRunning] = useState(false)
+  const [liveMsg, setLiveMsg] = useState(null)
   const [ownedNames, setOwnedNames] = useState(new Set())
   const [sortCol, setSortCol] = useState(null)
   const [sortDir, setSortDir] = useState(0)
   const [activeFixture, setActiveFixture] = useState(null)
+  const [showAll, setShowAll] = useState(false)
 
   useEffect(() => {
     fetchMatchday()
@@ -169,6 +172,35 @@ export default function Admin() {
     }
   }
 
+  async function runLiveMatchday() {
+    setLiveRunning(true)
+    setLiveMsg(null)
+    try {
+      const { data, error: fnError } = await supabase.functions.invoke('start-live-matchday', {
+        body: {},
+        headers: { 'x-force': 'true' },
+      })
+      // Also pass force=true via URL workaround using raw fetch
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/start-live-matchday?force=true`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          },
+          body: '{}',
+        }
+      )
+      const json = await res.json()
+      setLiveMsg(json.ok ? '✓ Live matchday started (runs for 5 min)' : `Error: ${json.reason ?? json.error}`)
+    } catch (err) {
+      setLiveMsg(`Error: ${err.message}`)
+    } finally {
+      setLiveRunning(false)
+    }
+  }
+
   function handleSort(col) {
     if (sortCol !== col) { setSortCol(col); setSortDir(1) }
     else if (sortDir === 1) setSortDir(-1)
@@ -180,7 +212,7 @@ export default function Admin() {
     return <span className="ml-0.5 text-white">{sortDir === 1 ? '↓' : '↑'}</span>
   }
 
-  const sortedLog = result ? [...result.log].sort((a, b) => {
+  const sortedLog = result ? [...result.log].filter(r => r.played).sort((a, b) => {
     if (sortCol) {
       const k = SORT_KEYS[sortCol]
       return sortDir === 1 ? b[k] - a[k] : a[k] - b[k]
@@ -189,6 +221,8 @@ export default function Admin() {
     const bO = ownedNames.has(b.player) ? 1 : 0
     return bO !== aO ? bO - aO : b.changePct - a.changePct
   }) : []
+
+  const displayLog = showAll ? sortedLog : sortedLog.filter(r => ownedNames.has(r.player))
 
   if (loading) return null
   if (!user) return <Navigate to="/login" replace />
@@ -205,13 +239,27 @@ export default function Admin() {
           <h1 className="text-xl font-bold text-white">Simulate</h1>
           <p className="text-xs text-gray-500 mt-0.5">Matchday {matchday ?? '—'} complete · next up MD {nextMatchday}</p>
         </div>
-        <button
-          onClick={runSimulation}
-          disabled={running || matchday == null}
-          className="bg-green-500 hover:bg-green-400 disabled:opacity-40 disabled:cursor-not-allowed text-black font-bold rounded-lg px-6 py-2.5 text-sm transition-colors"
-        >
-          {running ? 'Simulating…' : `Run MD ${nextMatchday}`}
-        </button>
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex gap-2">
+            <button
+              onClick={runSimulation}
+              disabled={running || matchday == null}
+              className="bg-green-500 hover:bg-green-400 disabled:opacity-40 disabled:cursor-not-allowed text-black font-bold rounded-lg px-4 py-2 text-sm transition-colors"
+            >
+              {running ? 'Simulating…' : `Instant MD ${nextMatchday}`}
+            </button>
+            <button
+              onClick={runLiveMatchday}
+              disabled={liveRunning}
+              className="bg-red-500/20 hover:bg-red-500/30 disabled:opacity-40 text-red-400 border border-red-500/30 font-bold rounded-lg px-4 py-2 text-sm transition-colors flex items-center gap-1.5"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-red-400"/>
+              {liveRunning ? 'Starting…' : 'Run Live MD'}
+            </button>
+            <Link to="/live" className="text-xs text-gray-500 hover:text-white flex items-center px-2">Watch →</Link>
+          </div>
+          {liveMsg && <p className={`text-xs ${liveMsg.startsWith('✓') ? 'text-green-400' : 'text-red-400'}`}>{liveMsg}</p>}
+        </div>
       </div>
 
       {error && (
@@ -221,9 +269,26 @@ export default function Admin() {
       )}
 
       {result && (
+        <div className="space-y-3">
+          {/* View toggle */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowAll(false)}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${!showAll ? 'bg-green-500 text-black' : 'bg-[#111318] border border-[#1e2330] text-gray-400 hover:text-white'}`}
+            >
+              My Players {ownedNames.size > 0 && `(${sortedLog.filter(r => ownedNames.has(r.player)).length})`}
+            </button>
+            <button
+              onClick={() => setShowAll(true)}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${showAll ? 'bg-green-500 text-black' : 'bg-[#111318] border border-[#1e2330] text-gray-400 hover:text-white'}`}
+            >
+              Display All ({sortedLog.length})
+            </button>
+          </div>
+
         <div className="bg-[#111318] border border-[#1e2330] rounded-xl overflow-hidden">
           {/* Column headers */}
-          <div className="grid grid-cols-[auto_1fr_repeat(5,auto)] items-center px-4 py-2.5 gap-3 border-b border-[#1e2330] text-xs text-gray-600">
+          <div className="grid grid-cols-[auto_1fr_repeat(6,auto)] items-center px-4 py-2.5 gap-3 border-b border-[#1e2330] text-xs text-gray-600">
             <span className="w-14">Result</span>
             <span>Player</span>
             {Object.keys(SORT_KEYS).map(col => (
@@ -235,7 +300,14 @@ export default function Admin() {
           </div>
 
           {/* Player rows */}
-          {sortedLog.map(row => {
+          {displayLog.length === 0 ? (
+            <div className="px-4 py-10 text-center text-gray-600 text-sm">
+              You don't own any players who played this matchday.
+              <button onClick={() => setShowAll(true)} className="block mx-auto mt-2 text-green-500 hover:text-green-400 transition-colors">
+                Show all players →
+              </button>
+            </div>
+          ) : displayLog.map(row => {
             const isOwned = ownedNames.has(row.player)
             const res = getResult(row)
             const resultColor = !res ? 'text-gray-600' :
@@ -245,7 +317,7 @@ export default function Admin() {
             return (
               <div
                 key={row.player}
-                className={`grid grid-cols-[auto_1fr_repeat(5,auto)] items-center px-4 py-3 gap-3 border-b border-[#1e2330] last:border-0 text-sm ${isOwned ? 'bg-green-500/[0.03]' : ''}`}
+                className={`grid grid-cols-[auto_1fr_repeat(6,auto)] items-center px-4 py-3 gap-3 border-b border-[#1e2330] last:border-0 text-sm ${isOwned ? 'bg-green-500/[0.03]' : ''}`}
               >
                 {/* Result badge */}
                 <button
@@ -268,8 +340,20 @@ export default function Admin() {
                 </div>
 
                 {/* Stats */}
-                <span className="text-gray-400 tabular-nums w-10 text-right">{row.goals}</span>
-                <span className="text-gray-400 tabular-nums w-10 text-right">{row.assists}</span>
+                <span className="text-gray-500 tabular-nums w-10 text-right">{row.minutes}'</span>
+                {row.position === 'Goalkeeper' ? (
+                  <>
+                    <span className="text-gray-400 tabular-nums w-10 text-right" title="Saves">{row.saves ?? 0}</span>
+                    <span className={`tabular-nums w-10 text-right ${row.clean_sheet ? 'text-green-400' : 'text-gray-600'}`} title="Clean sheet">
+                      {row.clean_sheet ? '✓' : '✗'}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-gray-400 tabular-nums w-10 text-right">{row.goals}</span>
+                    <span className="text-gray-400 tabular-nums w-10 text-right">{row.assists}</span>
+                  </>
+                )}
                 <span className={`tabular-nums w-10 text-right ${!row.played ? 'text-gray-700' : row.rating >= 7.0 ? 'text-green-400' : row.rating >= 6.5 ? 'text-orange-400' : 'text-red-400'}`}>
                   {row.played ? Number(row.rating).toFixed(1) : '—'}
                 </span>
@@ -280,6 +364,7 @@ export default function Admin() {
               </div>
             )
           })}
+        </div>
         </div>
       )}
     </div>

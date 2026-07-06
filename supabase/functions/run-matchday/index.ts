@@ -60,15 +60,16 @@ interface SimFixture {
 
 const GAME_TEAMS = ['Liverpool', 'Manchester City', 'Chelsea', 'Arsenal', 'Tottenham', 'Manchester United']
 
-const GOAL_WEIGHT: Record<string, number> = { Forward: 5, Midfielder: 2, Defender: 0.5, Goalkeeper: 0 }
+const GOAL_WEIGHT: Record<string, number> = { Forward: 10, Midfielder: 2.5, Defender: 0.8, Goalkeeper: 0 }
 
 function simGoals(): number {
   const r = Math.random()
-  if (r < 0.22) return 0
-  if (r < 0.50) return 1
-  if (r < 0.72) return 2
-  if (r < 0.88) return 3
-  return 4
+  if (r < 0.12) return 0
+  if (r < 0.32) return 1
+  if (r < 0.56) return 2
+  if (r < 0.76) return 3
+  if (r < 0.90) return 4
+  return 5
 }
 
 function generateSimFixtures(): SimFixture[] {
@@ -96,7 +97,7 @@ function weightedPick<T>(items: T[], weightFn: (item: T) => number): T | null {
 }
 
 function generateTeamMatchStats(
-  players: Array<{ id: string; position: string; name: string }>,
+  players: Array<{ id: string; position: string; name: string; current_price: number }>,
   teamGoals: number,
   opponentGoals: number,
   side: 'home' | 'away',
@@ -106,20 +107,60 @@ function generateTeamMatchStats(
   const lost = teamGoals < opponentGoals
   const resultMod = won ? 0.3 : lost ? -0.25 : 0
 
-  // Decide who plays
+  // Separate GKs (handled specially) from outfield
+  const gks      = [...players].filter(p => p.position === 'Goalkeeper').sort((a, b) => b.current_price - a.current_price)
+  const outfield = [...players].filter(p => p.position !== 'Goalkeeper').sort((a, b) => b.current_price - a.current_price)
+  const total = outfield.length
+  const starCutoff  = Math.ceil(total * 0.35)  // top 35% = stars (90 min)
+  const squadCutoff = Math.ceil(total * 0.70)  // next 35% = squad (50-80 min)
+  // bottom 30% = fringe/youth (rare 10-30 min cameos)
+
+  function dnpReason() { return DNP_REASONS[Math.floor(Math.random() * DNP_REASONS.length)] }
+
+  function pickMinutes(rank: number): number {
+    if (rank < starCutoff)  return 90
+    if (rank < squadCutoff) return Math.floor(Math.random() * 31) + 50
+    return Math.random() > 0.8 ? Math.floor(Math.random() * 21) + 10 : 0
+  }
+
   type Squad = { id: string; position: string; plays: boolean; minutes: number; dnp_reason?: string }
-  const squad: Squad[] = players.map(p => {
-    const plays = Math.random() > 0.12
-    return {
-      id: p.id, position: p.position, plays,
-      minutes: plays ? (Math.random() > 0.2 ? 90 : Math.floor(Math.random() * 55 + 30)) : 0,
-      dnp_reason: plays ? undefined : DNP_REASONS[Math.floor(Math.random() * DNP_REASONS.length)],
+
+  // GK logic: #1 plays unless DNP'd, #2 only if #1 out, #3 only if #1 and #2 both out
+  const gkSquad: Squad[] = []
+  let gkSlotFilled = false
+  for (let i = 0; i < gks.length; i++) {
+    const gk = gks[i]
+    if (gkSlotFilled) {
+      gkSquad.push({ id: gk.id, position: 'Goalkeeper', plays: false, minutes: 0, dnp_reason: 'Not selected' })
+      continue
     }
+    // #1 GK: 7% DNP chance; #2+: only called up if previous is out (already handled), so same DNP roll but they can be dropped too
+    const dnpChance = i === 0 ? 0.07 : 0.10
+    if (Math.random() < dnpChance) {
+      gkSquad.push({ id: gk.id, position: 'Goalkeeper', plays: false, minutes: 0, dnp_reason: dnpReason() })
+    } else {
+      gkSquad.push({ id: gk.id, position: 'Goalkeeper', plays: true, minutes: 90 })
+      gkSlotFilled = true
+    }
+  }
+
+  // Outfield logic: tiered by price
+  const outfieldSquad: Squad[] = outfield.map((p, rank) => {
+    const isfringe = rank >= squadCutoff
+    if (isfringe && pickMinutes(rank) === 0) {
+      return { id: p.id, position: p.position, plays: false, minutes: 0, dnp_reason: dnpReason() }
+    }
+    const dnp = rank < squadCutoff ? Math.random() < 0.08 : Math.random() < 0.25
+    if (dnp) return { id: p.id, position: p.position, plays: false, minutes: 0, dnp_reason: dnpReason() }
+    const mins = pickMinutes(rank)
+    return { id: p.id, position: p.position, plays: mins > 0, minutes: mins }
   })
+
+  const squad: Squad[] = [...gkSquad, ...outfieldSquad]
 
   const nameMap = new Map(players.map(p => [p.id, p.name]))
   const active = squad.filter(p => p.plays)
-  const outfield = active.filter(p => p.position !== 'Goalkeeper')
+  const activeOutfield = active.filter(p => p.position !== 'Goalkeeper')
 
   // Distribute goals — each goal assigned to a player by weighted random
   const goalTally: Record<string, number> = {}
@@ -129,7 +170,7 @@ function generateTeamMatchStats(
   const rawEvents: { scorerName: string; assisterName: string | null }[] = []
 
   for (let i = 0; i < teamGoals; i++) {
-    const scorer = weightedPick(outfield, p => GOAL_WEIGHT[p.position] ?? 0)
+    const scorer = weightedPick(activeOutfield, p => GOAL_WEIGHT[p.position] ?? 0)
     if (!scorer) continue
     goalTally[scorer.id]++
     let assisterName: string | null = null
@@ -173,8 +214,8 @@ function generateTeamMatchStats(
     const s = saveTally[p.id] ?? 0
     const cs = (p.position === 'Goalkeeper' || p.position === 'Defender') ? cleanSheet : false
 
-    // Base: tighter random range so contributions dominate
-    const base = 5.5 + Math.random() * 1.2 + resultMod
+    // Base: floor lifted so solid contributors naturally reach 7.0+
+    const base = 6.2 + Math.random() * 1.3 + resultMod
     const bonuses = p.position === 'Goalkeeper'
       ? s * 0.12 + (cs ? 0.9 : opponentGoals * -0.15)
       : (GOAL_BONUS[p.position]?.[Math.min(g, 4)] ?? 0)
@@ -233,16 +274,35 @@ function cleanSheetMap(fixture: FixtureInfo): Map<number, boolean> {
 // ── Price change formula (shared) ────────────────────────────────────────────
 
 function calcChangePct(stats: PlayerStats): number {
-  if (!stats.played) return -1
+  if (!stats.played) return -2
   let pct = 0
-  pct += stats.goals   * 5
-  pct += stats.assists * 3
-  if (stats.rating >= 8.0)      pct += 3
-  else if (stats.rating >= 7.0) pct += 1
-  else if (stats.rating < 6.0)  pct -= 3
-  if (stats.clean_sheet) pct += 4
-  if (stats.saves >= 5)  pct += 2
-  return Math.max(-15, Math.min(15, pct))
+  pct += stats.goals   * 8
+  pct += stats.assists * 5
+  if (stats.rating >= 9.0)       pct += 6
+  else if (stats.rating >= 8.0)  pct += 4
+  else if (stats.rating >= 7.0)  pct += 1
+  else if (stats.rating < 6.5)   pct -= 2
+  else if (stats.rating < 6.0)   pct -= 4
+  if (stats.clean_sheet) pct += 6
+  if (stats.saves >= 7)  pct += 4
+  else if (stats.saves >= 5) pct += 2
+  return Math.max(-20, Math.min(30, pct))
+}
+
+// ── Dividends ────────────────────────────────────────────────────────────────
+
+function dividendPerShare(position: string, stat: { goals: number; assists: number; minutes: number; rating: number; clean_sheet: boolean; saves: number }): number {
+  if (stat.minutes === 0) return 0
+  let d = 0.02 * (Math.min(stat.minutes, 90) / 90)
+  const goalRate = position === 'Forward' ? 0.20 : position === 'Midfielder' ? 0.14 : position === 'Defender' ? 0.10 : 0
+  d += stat.goals * goalRate
+  d += stat.assists * 0.08
+  if ((position === 'Goalkeeper' || position === 'Defender') && stat.clean_sheet) d += 0.12
+  const r = stat.rating ?? 0
+  if (r >= 9.0) d += 0.08
+  else if (r >= 8.0) d += 0.05
+  else if (r >= 7.0) d += 0.02
+  return parseFloat(d.toFixed(4))
 }
 
 // ── Edge Function ────────────────────────────────────────────────────────────
@@ -329,10 +389,10 @@ Deno.serve(async (req) => {
     const simStatsMap = new Map<string, PlayerStats>()
 
     if (simulate) {
-      const byClub = new Map<string, Array<{ id: string; position: string; name: string }>>()
+      const byClub = new Map<string, Array<{ id: string; position: string; name: string; current_price: number }>>()
       for (const p of (players as any[])) {
         if (!byClub.has(p.club)) byClub.set(p.club, [])
-        byClub.get(p.club)!.push({ id: p.id, position: p.position, name: p.name })
+        byClub.get(p.club)!.push({ id: p.id, position: p.position, name: p.name, current_price: p.current_price })
       }
       for (const f of simFixtures) {
         const home = generateTeamMatchStats(byClub.get(f.home) ?? [], f.homeGoals, f.awayGoals, 'home')
@@ -374,15 +434,17 @@ Deno.serve(async (req) => {
         dnp_reason: stats.played ? null : (stats.dnp_reason ?? 'Unknown'),
       })
       priceUpdates.push({ id: player.id, current_price: newPrice })
-      const playerFixture = simFixtures.find(f => f.home === player.club || f.away === player.club) ?? null
-      matchLog.push({
-        player: player.name, club: player.club, position: player.position,
-        played: stats.played, goals: stats.goals, assists: stats.assists,
-        rating: stats.rating, saves: stats.saves, clean_sheet: stats.clean_sheet,
-        changePct, oldPrice: player.current_price, newPrice,
-        dnpReason: stats.played ? null : (stats.dnp_reason ?? 'Unknown'),
-        fixture: playerFixture,
-      })
+      if (stats.played) {
+        const playerFixture = simFixtures.find(f => f.home === player.club || f.away === player.club) ?? null
+        matchLog.push({
+          player: player.name, club: player.club, position: player.position,
+          played: true, goals: stats.goals, assists: stats.assists,
+          rating: stats.rating, saves: stats.saves, clean_sheet: stats.clean_sheet,
+          minutes: stats.minutes,
+          changePct, oldPrice: player.current_price, newPrice,
+          fixture: playerFixture,
+        })
+      }
     }
 
     if (dryRun) return json({ dry_run: true, simulate, matchday, simFixtures, log: matchLog })
@@ -434,6 +496,40 @@ Deno.serve(async (req) => {
         }
         await supabase.from('limit_orders').update({ status: 'filled', filled_at: new Date().toISOString() }).eq('id', order.id)
       } catch (err) { console.error(`limit order ${order.id} failed:`, err) }
+    }
+
+    // ── 6. Dividends ────────────────────────────────────────────────────────
+    const { data: portfolios } = await supabase.from('portfolios').select('user_id, player_id, shares').gt('shares', 0)
+    if (portfolios?.length) {
+      const byPlayer = new Map<string, { user_id: string; shares: number }[]>()
+      for (const p of (portfolios as any[])) {
+        if (!byPlayer.has(p.player_id)) byPlayer.set(p.player_id, [])
+        byPlayer.get(p.player_id)!.push({ user_id: p.user_id, shares: p.shares })
+      }
+      const playerPositions = new Map((players as any[]).map(p => [p.id, p.position]))
+      const userTotals = new Map<string, number>()
+      const divInserts: any[] = []
+
+      for (const [playerId, holders] of byPlayer) {
+        const entry = statsInserts.find((s: any) => s.player_id === playerId)
+        if (!entry || entry.minutes === 0) continue
+        const pos = playerPositions.get(playerId) ?? 'Midfielder'
+        const dpShare = dividendPerShare(pos, entry)
+        if (dpShare <= 0) continue
+        for (const { user_id, shares } of holders) {
+          const total = parseFloat((dpShare * shares).toFixed(2))
+          if (total <= 0) continue
+          userTotals.set(user_id, (userTotals.get(user_id) ?? 0) + total)
+          divInserts.push({ user_id, player_id: playerId, matchday, shares, dividend_per_share: dpShare, total_payment: total })
+        }
+      }
+      if (divInserts.length) {
+        await supabase.from('dividend_payments').insert(divInserts)
+        for (const [userId, total] of userTotals) {
+          const { data: u } = await supabase.from('users').select('balance').eq('id', userId).single()
+          if (u) await supabase.from('users').update({ balance: u.balance + total }).eq('id', userId)
+        }
+      }
     }
 
     return json({ success: true, matchday, simulate, simFixtures, apiFixtures: fixtureCount, log: matchLog })

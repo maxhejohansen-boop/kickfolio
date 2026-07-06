@@ -1,18 +1,10 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../lib/AuthContext'
 import PlayerCard from '../components/PlayerCard'
+import { calcGrade, GRADE_META } from '../lib/gradeCalc'
 
 const POSITIONS = ['All', 'Forward', 'Midfielder', 'Defender', 'Goalkeeper']
-
-const TEAMS = [
-  { label: 'All',      club: 'All' },
-  { label: 'Arsenal',  club: 'Arsenal' },
-  { label: 'Chelsea',  club: 'Chelsea' },
-  { label: 'Liverpool',club: 'Liverpool' },
-  { label: 'Man City', club: 'Manchester City' },
-  { label: 'Man Utd',  club: 'Manchester United' },
-  { label: 'Spurs',    club: 'Tottenham' },
-]
 
 const SORT_OPTIONS = [
   { label: 'Price',   key: 'current_price' },
@@ -20,24 +12,35 @@ const SORT_OPTIONS = [
   { label: 'Goals',   key: 'goals' },
   { label: 'Assists', key: 'assists' },
   { label: 'Rating',  key: 'rating' },
-  { label: 'Saves',   key: 'saves' },
+]
+
+const GRADE_CHIPS = [
+  { value: 'All', label: 'All Grades',  active: 'bg-[#1e2330] text-white border border-gray-600' },
+  { value: 'A',   label: 'Strong Buy',  active: 'bg-green-500 text-black' },
+  { value: 'B',   label: 'Buy',         active: 'bg-green-500/20 text-green-400 border border-green-500/30' },
+  { value: 'C',   label: 'Fair Value',  active: 'bg-[#1e2330] text-gray-200 border border-gray-500' },
+  { value: 'D',   label: 'Overvalued',  active: 'bg-red-500/10 text-red-400 border border-red-500/20' },
 ]
 
 export default function Market() {
+  const { userRecord, user } = useAuth()
   const [players, setPlayers] = useState([])
   const [statsMap, setStatsMap] = useState({})
   const [appsMap, setAppsMap] = useState({})
+  const [historyMap, setHistoryMap] = useState({})
+  const [last5Map, setLast5Map] = useState({})
+  const [gradeFilter, setGradeFilter] = useState('All')
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('All')
-  const [teamFilter, setTeamFilter] = useState('All')
   const [search, setSearch] = useState('')
   const [matchday, setMatchday] = useState(0)
   const [sortKey, setSortKey] = useState('changePct')
   const [sortDir, setSortDir] = useState(-1)
+  const [scoutsMap, setScoutsMap] = useState({})
 
   useEffect(() => {
     fetchAll()
-  }, [])
+  }, [user?.id])
 
   async function fetchAll() {
     const [playersRes, trackerRes] = await Promise.all([
@@ -50,11 +53,21 @@ export default function Market() {
     const allPlayers = playersRes.data ?? []
     setPlayers(allPlayers)
 
-    const [latestRes, appsRes] = await Promise.all([
+    const [latestRes, appsRes, historyRes, last5Res, scoutsRes] = await Promise.all([
       currentMatchday > 0
         ? supabase.from('matchday_stats').select('*').eq('matchday', currentMatchday)
         : Promise.resolve({ data: [] }),
       supabase.from('matchday_stats').select('player_id').gt('minutes', 0),
+      supabase.from('price_history').select('player_id, price, matchday').order('matchday', { ascending: true }),
+      currentMatchday > 0
+        ? supabase
+            .from('matchday_stats')
+            .select('player_id, matchday, goals, assists, rating, minutes, saves, clean_sheet')
+            .gte('matchday', Math.max(1, currentMatchday - 4))
+        : Promise.resolve({ data: [] }),
+      user
+        ? supabase.from('player_scouts').select('*').eq('user_id', user.id)
+        : Promise.resolve({ data: [] }),
     ])
 
     const map = {}
@@ -67,7 +80,29 @@ export default function Market() {
     }
     setAppsMap(appsCount)
 
+    const hMap = {}
+    for (const r of (historyRes.data ?? [])) {
+      if (!hMap[r.player_id]) hMap[r.player_id] = []
+      hMap[r.player_id].push({ price: r.price, matchday: r.matchday })
+    }
+    setHistoryMap(hMap)
+
+    const l5 = {}
+    for (const r of (last5Res.data ?? [])) {
+      if (!l5[r.player_id]) l5[r.player_id] = []
+      l5[r.player_id].push(r)
+    }
+    setLast5Map(l5)
+
+    const sm = {}
+    for (const s of (scoutsRes.data ?? [])) sm[s.player_id] = s
+    setScoutsMap(sm)
+
     setLoading(false)
+  }
+
+  function handleScoutUpdate(playerId, scoutRecord) {
+    setScoutsMap(m => ({ ...m, [playerId]: scoutRecord }))
   }
 
   function handleSort(key) {
@@ -75,12 +110,35 @@ export default function Market() {
     else { setSortKey(key); setSortDir(-1) }
   }
 
+  function clearFilters() {
+    setFilter('All')
+    setGradeFilter('All')
+    setSearch('')
+    setSortKey('changePct')
+    setSortDir(-1)
+  }
+
+  const filtersActive = filter !== 'All' || gradeFilter !== 'All' || search !== '' || sortKey !== 'changePct'
+
+  const balance = userRecord?.balance ?? 0
+
+  // Compute grade per player (derived, not stored in state)
+  const gradeMap = {}
+  for (const p of players) {
+    const g = calcGrade(p, last5Map[p.id], historyMap[p.id], balance)
+    if (g) gradeMap[p.id] = g
+  }
+
+  // Count per grade across all players for chip badges
+  const gradeCounts = { A: 0, B: 0, C: 0, D: 0 }
+  for (const g of Object.values(gradeMap)) gradeCounts[g.grade]++
+
   const filtered = players
     .filter(p => {
-      const matchPos  = filter === 'All' || p.position === filter
-      const matchTeam = teamFilter === 'All' || p.club === teamFilter
+      const matchPos    = filter === 'All' || p.position === filter
       const matchSearch = p.name.toLowerCase().includes(search.toLowerCase()) || p.club.toLowerCase().includes(search.toLowerCase())
-      return matchPos && matchTeam && matchSearch
+      const matchGrade  = gradeFilter === 'All' || gradeMap[p.id]?.grade === gradeFilter
+      return matchPos && matchSearch && matchGrade
     })
     .map(p => {
       const s = statsMap[p.id] ?? null
@@ -98,7 +156,7 @@ export default function Market() {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-        <div>
+        <div data-tutorial="matchday-info">
           <h1 className="text-2xl font-bold text-white">Market</h1>
           <p className="text-sm text-gray-500 mt-0.5">Matchday {matchday} · {players.length} players</p>
           <p className="text-xs text-gray-600 mt-0.5">Starting prices based on 2024/25 season stats</p>
@@ -112,56 +170,66 @@ export default function Market() {
         />
       </div>
 
-      <div className="flex flex-wrap gap-2 mb-3 overflow-x-auto pb-1">
-        {POSITIONS.map(pos => (
-          <button
-            key={pos}
-            onClick={() => setFilter(pos)}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
-              filter === pos
-                ? 'bg-green-500 text-black'
-                : 'bg-[#111318] border border-[#1e2330] text-gray-400 hover:text-white'
-            }`}
-          >
-            {pos}
-          </button>
-        ))}
-      </div>
-
-      <div className="flex flex-wrap gap-2 mb-4 overflow-x-auto pb-1">
-        {TEAMS.map(({ label, club }) => (
-          <button
-            key={club}
-            onClick={() => setTeamFilter(club)}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
-              teamFilter === club
-                ? 'bg-blue-500 text-white'
-                : 'bg-[#111318] border border-[#1e2330] text-gray-400 hover:text-white'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      <div className="flex flex-wrap gap-2 mb-6">
-        {SORT_OPTIONS.map(opt => {
-          const active = sortKey === opt.key
-          return (
+      <div data-tutorial="market-filters" className="flex items-center gap-3 mb-6">
+        {/* Scrollable chips */}
+        <div className="flex items-center gap-2 overflow-x-auto flex-1 min-w-0 pb-0.5">
+          {/* Grade filter */}
+          {Object.keys(gradeMap).length > 0 && GRADE_CHIPS.map(({ value, label, active }) => (
             <button
-              key={opt.key}
-              onClick={() => handleSort(opt.key)}
-              className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors flex items-center gap-1 ${
-                active
-                  ? 'bg-[#1e2330] text-white border border-gray-600'
+              key={value}
+              onClick={() => setGradeFilter(value)}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
+                gradeFilter === value
+                  ? active
                   : 'bg-[#111318] border border-[#1e2330] text-gray-400 hover:text-white'
               }`}
             >
-              {opt.label}
-              {active && <span>{sortDir === -1 ? '↓' : '↑'}</span>}
+              {label}{value !== 'All' && gradeCounts[value] > 0 ? ` (${gradeCounts[value]})` : ''}
             </button>
-          )
-        })}
+          ))}
+          {Object.keys(gradeMap).length > 0 && <span className="w-px h-4 bg-[#1e2330] shrink-0 mx-1" />}
+
+          {/* Position filter */}
+          {POSITIONS.map(pos => (
+            <button
+              key={pos}
+              onClick={() => setFilter(pos)}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
+                filter === pos
+                  ? 'bg-green-500 text-black'
+                  : 'bg-[#111318] border border-[#1e2330] text-gray-400 hover:text-white'
+              }`}
+            >
+              {pos}
+            </button>
+          ))}
+        </div>
+
+        {/* Sort dropdown + clear */}
+        <div className="flex items-center gap-2 shrink-0">
+          <select
+            value={`${sortKey}:${sortDir}`}
+            onChange={e => {
+              const [key, dir] = e.target.value.split(':')
+              setSortKey(key)
+              setSortDir(parseInt(dir))
+            }}
+            className="bg-[#111318] border border-[#1e2330] text-gray-300 text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:border-gray-500 cursor-pointer"
+          >
+            {SORT_OPTIONS.flatMap(opt => [
+              <option key={`${opt.key}:-1`} value={`${opt.key}:-1`}>Sort: {opt.label} ↓</option>,
+              <option key={`${opt.key}:1`}  value={`${opt.key}:1`}>Sort: {opt.label} ↑</option>,
+            ])}
+          </select>
+          {filtersActive && (
+            <button
+              onClick={clearFilters}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium text-gray-500 hover:text-white border border-[#1e2330] hover:border-gray-600 transition-colors whitespace-nowrap"
+            >
+              ✕ Clear
+            </button>
+          )}
+        </div>
       </div>
 
       {loading ? (
@@ -173,9 +241,20 @@ export default function Market() {
       ) : filtered.length === 0 ? (
         <div className="text-center text-gray-500 py-16">No players found</div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {filtered.map(player => (
-            <PlayerCard key={player.id} player={player} latestStats={statsMap[player.id] ?? null} appearances={appsMap[player.id] ?? 0} />
+        <div data-tutorial="market-grid" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          {filtered.map((player, i) => (
+            <PlayerCard
+              key={player.id}
+              player={player}
+              latestStats={statsMap[player.id] ?? null}
+              appearances={appsMap[player.id] ?? 0}
+              priceHistory={historyMap[player.id] ?? []}
+              gradeData={gradeMap[player.id] ?? null}
+              scoutInfo={scoutsMap[player.id] ?? null}
+              currentMatchday={matchday}
+              onScoutUpdate={handleScoutUpdate}
+              tutorialTarget={i === 0 ? 'player-card' : undefined}
+            />
           ))}
         </div>
       )}

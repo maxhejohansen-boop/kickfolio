@@ -20,18 +20,27 @@ export default function Portfolio() {
   const [loading, setLoading] = useState(true)
   const [selectedPlayer, setSelectedPlayer] = useState(null)
   const [teamFilter, setTeamFilter] = useState('All')
+  const [totalDividends, setTotalDividends] = useState(0)
+  const [recentDividends, setRecentDividends] = useState([])
 
   useEffect(() => {
     if (user) fetchHoldings()
   }, [user])
 
   async function fetchHoldings() {
-    const { data } = await supabase
-      .from('portfolios')
-      .select('*, players(*)')
-      .eq('user_id', user.id)
-      .gt('shares', 0)
-    setHoldings(data ?? [])
+    const [holdingsRes, divRes, recentDivRes] = await Promise.all([
+      supabase.from('portfolios').select('*, players(*)').eq('user_id', user.id).gt('shares', 0),
+      supabase.from('dividend_payments').select('total_payment').eq('user_id', user.id),
+      supabase.from('dividend_payments')
+        .select('total_payment, matchday, player_id, players(name, position)')
+        .eq('user_id', user.id)
+        .order('paid_at', { ascending: false })
+        .limit(8),
+    ])
+    setHoldings(holdingsRes.data ?? [])
+    const divTotal = (divRes.data ?? []).reduce((s, r) => s + Number(r.total_payment), 0)
+    setTotalDividends(divTotal)
+    setRecentDividends(recentDivRes.data ?? [])
     setLoading(false)
   }
 
@@ -62,10 +71,10 @@ export default function Portfolio() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    <div data-tutorial="portfolio-table" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
       <h1 className="text-2xl font-bold text-white mb-6">Portfolio</h1>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
         <StatCard label="Total Invested" value={`£${totalInvested.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />
         <StatCard label="Current Value" value={`£${currentValue.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />
         <StatCard
@@ -74,8 +83,32 @@ export default function Portfolio() {
           sub={`${totalPLPct >= 0 ? '+' : ''}${totalPLPct.toFixed(2)}%`}
           color={totalPL >= 0 ? 'text-green-400' : 'text-red-400'}
         />
+        <StatCard
+          label="Dividends"
+          value={`£${totalDividends.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+          sub="all time"
+          color="text-amber-400"
+        />
         <StatCard label="Available Cash" value={`£${availableCash.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />
       </div>
+
+      {recentDividends.length > 0 && (
+        <div className="bg-[#111318] border border-[#1e2330] rounded-xl p-4 mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-amber-400 text-sm">💰</span>
+            <span className="text-white text-sm font-semibold">Recent dividends</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {recentDividends.map((d, i) => (
+              <div key={i} className="flex items-center gap-1.5 bg-amber-500/10 border border-amber-500/20 rounded-full px-3 py-1">
+                <span className="text-xs text-amber-300 font-medium">{d.players?.name}</span>
+                <span className="text-amber-600 text-xs">MD{d.matchday}</span>
+                <span className="text-xs text-amber-400 font-bold">+£{Number(d.total_payment).toFixed(2)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="space-y-3">
