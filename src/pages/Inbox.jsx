@@ -4,11 +4,11 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthContext'
 
 const TYPE_META = {
-  bill:         { icon: '💸', dot: 'bg-red-400' },
-  scout_report: { icon: '🔍', dot: 'bg-violet-400' },
-  tip:          { icon: '💡', dot: 'bg-amber-400' },
-  news:         { icon: '📰', dot: 'bg-blue-400' },
-  interview:    { icon: '🎤', dot: 'bg-pink-400' },
+  bill:         { label: 'Bill',    short: 'BILL',   color: 'text-red-400',    bar: 'bg-red-500',    chip: 'bg-red-500/10 text-red-400 border-red-500/20' },
+  scout_report: { label: 'Report',  short: 'REPORT', color: 'text-green-400',  bar: 'bg-green-500',  chip: 'bg-green-500/10 text-green-400 border-green-500/20' },
+  tip:          { label: 'Tip',     short: 'TIP',    color: 'text-amber-400',  bar: 'bg-amber-400',  chip: 'bg-amber-500/10 text-amber-400 border-amber-500/20' },
+  news:         { label: 'News',    short: 'NEWS',   color: 'text-blue-400',   bar: 'bg-blue-500',   chip: 'bg-blue-500/10 text-blue-400 border-blue-500/20' },
+  interview:    { label: 'Media',   short: 'MEDIA',  color: 'text-purple-400', bar: 'bg-purple-500', chip: 'bg-purple-500/10 text-purple-400 border-purple-500/20' },
 }
 
 const TABS = [
@@ -25,11 +25,11 @@ function msgTime(ts) {
 }
 
 function groupByDate(msgs) {
-  const today = new Date().toDateString()
+  const today     = new Date().toDateString()
   const yesterday = new Date(Date.now() - 86400000).toDateString()
   const map = new Map()
   for (const m of msgs) {
-    const d = new Date(m.created_at)
+    const d  = new Date(m.created_at)
     const ds = d.toDateString()
     const label = ds === today ? 'Today' : ds === yesterday ? 'Yesterday'
       : d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
@@ -39,21 +39,12 @@ function groupByDate(msgs) {
   return [...map.entries()].map(([date, items]) => ({ date, items }))
 }
 
-function Avatar({ type, size = 'sm' }) {
-  const meta = TYPE_META[type] ?? TYPE_META.news
-  return (
-    <div className={`rounded-full bg-[#252740] border border-[#2e3050] flex items-center justify-center flex-shrink-0 ${size === 'lg' ? 'w-12 h-12 text-xl' : 'w-9 h-9 text-sm'}`}>
-      {meta.icon}
-    </div>
-  )
-}
-
 export default function Inbox() {
   const { user } = useAuth()
-  const [messages, setMessages] = useState([])
-  const [selected, setSelected] = useState(null)
-  const [tab, setTab] = useState('all')
-  const [loading, setLoading] = useState(true)
+  const [messages,  setMessages]  = useState([])
+  const [selected,  setSelected]  = useState(null)
+  const [tab,       setTab]       = useState('all')
+  const [loading,   setLoading]   = useState(true)
 
   useEffect(() => {
     if (!user) return
@@ -115,29 +106,32 @@ export default function Inbox() {
   }
 
   const groups = groupByDate(filtered)
+  const selMeta = selected ? TYPE_META[selected.type] ?? TYPE_META.news : null
 
   return (
     <div className="flex overflow-hidden" style={{ height: 'calc(100vh - 3.5rem)' }}>
 
       {/* ── List panel ──────────────────────────────────────────────── */}
-      <div className={`flex flex-col bg-[#15162a] border-r border-[#1e2040] flex-shrink-0 ${selected ? 'hidden lg:flex lg:w-[380px]' : 'flex-1 lg:flex lg:w-[380px]'}`}>
+      <div className={`flex flex-col border-r border-[#1e2330] flex-shrink-0 bg-[#111318] ${selected ? 'hidden lg:flex lg:w-[360px]' : 'flex-1 lg:flex lg:w-[360px]'}`}>
 
-        {/* Tab bar */}
-        <div className="flex items-center border-b border-[#1e2040] px-2 flex-shrink-0 overflow-x-auto">
+        {/* Filter chips */}
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-[#1e2330] overflow-x-auto flex-shrink-0">
           {TABS.map(({ key, label }) => {
-            const badge = tabBadge(key)
+            const badge  = tabBadge(key)
             const active = tab === key
             return (
               <button
                 key={key}
                 onClick={() => setTab(key)}
-                className={`relative flex items-center gap-1.5 px-3 py-3 text-[13px] font-medium transition-colors whitespace-nowrap ${
-                  active ? 'text-white border-b-2 border-violet-500' : 'text-[#6b7080] hover:text-[#9ca3af]'
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
+                  active
+                    ? 'bg-green-500 text-black'
+                    : 'bg-[#111318] border border-[#1e2330] text-gray-400 hover:text-white'
                 }`}
               >
                 {label}
                 {badge && (
-                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none ${active ? 'bg-violet-600 text-white' : 'bg-[#252740] text-[#9ca3af]'}`}>
+                  <span className={`text-[10px] font-bold rounded-full px-1.5 py-0.5 leading-none ${active ? 'bg-black/20 text-black' : 'bg-[#1e2330] text-gray-300'}`}>
                     {badge > 99 ? '99+' : badge}
                   </span>
                 )}
@@ -147,7 +141,7 @@ export default function Inbox() {
           <button
             onClick={markAllRead}
             disabled={unreadCount === 0}
-            className="ml-auto p-2 text-[#6b7080] hover:text-white disabled:opacity-25 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+            className="ml-auto text-gray-600 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors flex-shrink-0"
             title="Mark all as read"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
@@ -156,61 +150,57 @@ export default function Inbox() {
           </button>
         </div>
 
-        {/* Messages */}
+        {/* Message list */}
         <div className="flex-1 overflow-y-auto">
           {loading ? (
             <div className="p-3 space-y-1">
               {Array.from({ length: 10 }).map((_, i) => (
-                <div key={i} className="h-[62px] bg-[#1e2040] rounded animate-pulse" />
+                <div key={i} className="h-14 bg-[#1a1f28] rounded animate-pulse" />
               ))}
             </div>
           ) : filtered.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full py-20 text-center px-6">
-              <div className="text-3xl mb-3 opacity-20">📭</div>
-              <p className="text-[#6b7080] text-sm">No messages</p>
-              <p className="text-[#4b5060] text-xs mt-1">Run a matchday to start receiving messages</p>
+            <div className="flex flex-col items-center justify-center h-full text-center px-6">
+              <p className="text-gray-500 text-sm">No messages</p>
+              <p className="text-gray-700 text-xs mt-1">Run a matchday to start receiving messages</p>
             </div>
           ) : (
             groups.map(({ date, items }) => (
               <div key={date}>
-                <div className="px-4 pt-3.5 pb-1.5 sticky top-0 z-10 bg-[#15162a]">
-                  <span className="text-[10px] text-[#4b5060] font-semibold uppercase tracking-widest">{date}</span>
+                {/* Date group header */}
+                <div className="px-4 pt-4 pb-1.5 sticky top-0 z-10 bg-[#111318]">
+                  <span className="text-[10px] text-gray-600 font-semibold uppercase tracking-widest">{date}</span>
                 </div>
 
                 {items.map(msg => {
                   const isSelected = selected?.id === msg.id
-                  const typeMeta = TYPE_META[msg.type] ?? TYPE_META.news
+                  const typeMeta   = TYPE_META[msg.type] ?? TYPE_META.news
                   return (
                     <div
                       key={msg.id}
                       onClick={() => open(msg)}
-                      className={`relative flex items-center gap-3 pl-6 pr-4 py-3 cursor-pointer transition-colors border-l-2 ${
+                      className={`relative flex items-stretch cursor-pointer transition-colors border-b border-[#1e2330]/40 ${
                         isSelected
-                          ? 'bg-violet-900/40 border-violet-500'
-                          : 'border-transparent hover:bg-[#1e2040]/70'
+                          ? 'bg-[#1a2518]'
+                          : 'hover:bg-[#1a1f28]'
                       }`}
                     >
-                      {!msg.read && (
-                        <span className={`absolute left-2 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full ${typeMeta.dot}`} />
-                      )}
+                      {/* Type colour bar */}
+                      <div className={`w-0.5 flex-shrink-0 ${isSelected ? typeMeta.bar : 'bg-transparent'}`} />
 
-                      <Avatar type={msg.type} />
+                      {/* Unread dot column */}
+                      <div className="flex items-center justify-center w-5 flex-shrink-0">
+                        {!msg.read && <span className={`w-1.5 h-1.5 rounded-full ${typeMeta.bar}`} />}
+                      </div>
 
-                      <div className="flex-1 min-w-0">
+                      {/* Content */}
+                      <div className="flex-1 min-w-0 py-3 pr-4">
                         <div className="flex items-center justify-between gap-2 mb-0.5">
-                          <span className={`text-[13px] truncate leading-none ${msg.read ? 'text-[#9ca3af] font-normal' : 'text-white font-semibold'}`}>
+                          <span className={`text-sm truncate ${msg.read ? 'text-gray-500 font-normal' : 'text-white font-semibold'}`}>
                             {msg.sender}
                           </span>
-                          <div className="flex items-center gap-1 flex-shrink-0">
-                            {msg.read && (
-                              <svg className="w-3 h-3 text-violet-500/70" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-                              </svg>
-                            )}
-                            <span className="text-[11px] text-[#4b5060]">{msgTime(msg.created_at)}</span>
-                          </div>
+                          <span className="text-[11px] text-gray-600 flex-shrink-0 tabular-nums">{msgTime(msg.created_at)}</span>
                         </div>
-                        <div className={`text-[13px] truncate leading-snug ${msg.read ? 'text-[#4b5060]' : 'text-[#b0b4cc]'}`}>
+                        <div className={`text-sm truncate ${msg.read ? 'text-gray-600' : 'text-gray-300'}`}>
                           {msg.subject}
                         </div>
                       </div>
@@ -225,87 +215,85 @@ export default function Inbox() {
 
       {/* ── Detail pane ─────────────────────────────────────────────── */}
       {selected ? (
-        <div className="flex-1 flex flex-col bg-[#1a1b2f] overflow-hidden">
+        <div className="flex-1 flex flex-col bg-[#0d0e13] overflow-hidden">
 
           {/* Header */}
-          <div className="flex items-start gap-4 px-6 py-5 border-b border-[#1e2040] flex-shrink-0">
-            <button
-              onClick={() => setSelected(null)}
-              className="lg:hidden text-[#6b7080] hover:text-white mt-0.5 flex-shrink-0"
-            >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
-              </svg>
-            </button>
-
-            <Avatar type={selected.type} size="lg" />
-
-            <div className="flex-1 min-w-0">
-              <div className="text-[#9ca3af] text-[13px] mb-0.5">{selected.sender}</div>
-              <div className="text-white font-semibold text-[17px] leading-snug">{selected.subject}</div>
-            </div>
-
-            <div className="flex items-center gap-3 flex-shrink-0 mt-1">
-              <span className="text-[#4b5060] text-sm tabular-nums">{msgTime(selected.created_at)}</span>
+          <div className="flex-shrink-0 border-b border-[#1e2330] px-6 py-5">
+            <div className="flex items-start gap-3 mb-3">
               <button
-                onClick={() => deleteMsg(selected.id)}
-                className="text-[#4b5060] hover:text-red-400 transition-colors"
-                title="Delete"
+                onClick={() => setSelected(null)}
+                className="lg:hidden text-gray-500 hover:text-white mt-0.5 flex-shrink-0 transition-colors"
               >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
                 </svg>
               </button>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded border uppercase tracking-wider ${selMeta.chip}`}>
+                    {selMeta.label}
+                  </span>
+                  <span className="text-gray-600 text-xs">{selected.sender}</span>
+                </div>
+                <h2 className="text-white font-semibold text-lg leading-snug">{selected.subject}</h2>
+              </div>
+              <div className="flex items-center gap-3 flex-shrink-0">
+                <span className="text-gray-600 text-xs tabular-nums">{msgTime(selected.created_at)}</span>
+                <button
+                  onClick={() => deleteMsg(selected.id)}
+                  className="text-gray-600 hover:text-red-400 transition-colors"
+                  title="Delete"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                  </svg>
+                </button>
+              </div>
             </div>
           </div>
 
           {/* Body */}
           <div className="flex-1 overflow-y-auto px-6 py-6">
-            <div className="max-w-2xl">
-              <p className="text-[#c4c6d8] text-sm leading-7 whitespace-pre-line font-mono">
+            <div className="max-w-xl">
+              <p className="text-gray-300 text-sm leading-7 whitespace-pre-line">
                 {selected.body}
               </p>
             </div>
           </div>
 
           {/* Action bar */}
-          <div className="flex-shrink-0 border-t border-[#1e2040]">
-            <div className="flex items-center gap-4 px-6 py-3.5 bg-gradient-to-r from-violet-900/40 to-transparent">
-              <span className="text-[#9ca3af] text-[13px] font-semibold tracking-wide">Action message</span>
-              <div className="w-px h-4 bg-[#1e2040]" />
-              {selected.type === 'scout_report' && (
-                <Link
-                  to="/scouting"
-                  className="text-[13px] bg-violet-700 hover:bg-violet-600 text-white font-medium px-4 py-1.5 rounded transition-colors"
-                >
-                  View in Scouting →
-                </Link>
-              )}
-              {(selected.type === 'tip' || selected.type === 'news') && (
-                <Link
-                  to="/market"
-                  className="text-[13px] bg-violet-700 hover:bg-violet-600 text-white font-medium px-4 py-1.5 rounded transition-colors"
-                >
-                  Open Market →
-                </Link>
-              )}
-              {selected.type === 'bill' && (
-                <Link
-                  to="/portfolio"
-                  className="text-[13px] bg-violet-700 hover:bg-violet-600 text-white font-medium px-4 py-1.5 rounded transition-colors"
-                >
-                  View Portfolio →
-                </Link>
-              )}
-            </div>
+          <div className="flex-shrink-0 border-t border-[#1e2330] bg-[#111318] px-6 py-3 flex items-center gap-3">
+            <span className="text-gray-600 text-xs font-medium uppercase tracking-wider">Action</span>
+            <div className="w-px h-4 bg-[#1e2330]" />
+            {selected.type === 'scout_report' && (
+              <Link
+                to="/scouting"
+                className="text-xs bg-green-500 hover:bg-green-400 text-black font-bold px-4 py-1.5 rounded transition-colors"
+              >
+                View in Scouting →
+              </Link>
+            )}
+            {(selected.type === 'tip' || selected.type === 'news') && (
+              <Link
+                to="/market"
+                className="text-xs bg-green-500 hover:bg-green-400 text-black font-bold px-4 py-1.5 rounded transition-colors"
+              >
+                Open Market →
+              </Link>
+            )}
+            {selected.type === 'bill' && (
+              <Link
+                to="/portfolio"
+                className="text-xs bg-[#1e2330] hover:bg-[#252d3d] text-gray-300 font-medium px-4 py-1.5 rounded border border-[#2a3344] transition-colors"
+              >
+                View Portfolio →
+              </Link>
+            )}
           </div>
         </div>
       ) : (
-        <div className="hidden lg:flex flex-1 items-center justify-center bg-[#1a1b2f]">
-          <div className="text-center select-none">
-            <div className="text-5xl mb-4 opacity-10">📬</div>
-            <p className="text-[#4b5060] text-sm">Select a message to read it</p>
-          </div>
+        <div className="hidden lg:flex flex-1 items-center justify-center bg-[#0d0e13]">
+          <p className="text-gray-700 text-sm select-none">Select a message to read it</p>
         </div>
       )}
     </div>
