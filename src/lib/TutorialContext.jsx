@@ -7,8 +7,8 @@ const TutorialContext = createContext(null)
 
 const STEP_ROUTES = {
   1: '/market', 2: '/market', 3: '/market', 4: '/market', 5: '/market',
-  6: '/market', 7: '/market', 8: '/portfolio', 9: '/leaderboard',
-  10: '/market', 11: '/market',
+  6: '/market', 7: '/market', 8: '/portfolio', 9: '/inbox', 10: '/scouting',
+  11: '/market', 12: '/leaderboard', 13: '/market',
 }
 
 export function TutorialProvider({ children }) {
@@ -30,7 +30,7 @@ export function TutorialProvider({ children }) {
 
     if (saved) {
       const n = parseInt(saved, 10)
-      if (!isNaN(n) && n >= 1 && n <= 11) {
+      if (!isNaN(n) && n >= 1 && n <= 13) {
         setStep(n)
         setSubStep(0)
         navigate(STEP_ROUTES[n])
@@ -57,7 +57,7 @@ export function TutorialProvider({ children }) {
 
   function nextStep() {
     if (!step) return
-    if (step === 11) { completeTutorial(); return }
+    if (step === 13) { completeTutorial(); return }
     const next = step + 1
     localStorage.setItem('kickfolio_tutorial_step', String(next))
     setStep(next)

@@ -76,7 +76,7 @@ export default function Navbar() {
     >
       {label}
       {badge > 0 && (
-        <span className="absolute -top-2 -right-3 bg-blue-500 text-white text-[9px] font-bold rounded-full min-w-[16px] h-4 flex items-center justify-center px-1 leading-none">
+        <span className="absolute -top-2.5 -right-3.5 bg-red-500 text-white text-[9px] font-bold rounded-full min-w-[17px] h-[17px] flex items-center justify-center px-1 leading-none ring-2 ring-[#111318]">
           {badge > 99 ? '99+' : badge}
         </span>
       )}
@@ -119,13 +119,13 @@ export default function Navbar() {
                   className="hidden sm:flex flex-col items-end text-right cursor-pointer group"
                 >
                   <span className="text-xs text-gray-500 group-hover:text-gray-300 transition-colors flex items-center gap-1">
-                    Wallet
+                    Cash
                     <svg className={`w-3 h-3 text-gray-500 transition-transform ${menuOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
                     </svg>
                   </span>
                   <span className="text-sm font-bold text-white group-hover:text-green-300 transition-colors tabular-nums">
-                    £{userRecord ? ((userRecord.balance ?? 0) + portfolioValue).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
+                    £{userRecord ? (userRecord.balance ?? 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
                   </span>
                 </button>
 
@@ -141,14 +141,26 @@ export default function Navbar() {
                 {menuOpen && (
                   <div className="absolute right-0 top-full mt-2 w-52 bg-[#111318] border border-[#1e2330] rounded-xl shadow-xl py-1 z-[200]">
                     <div className="px-4 py-2.5 border-b border-[#1e2330]">
-                      <div className="text-xs text-gray-500 truncate mb-1.5">{user.email}</div>
-                      <div className="text-sm font-bold text-white">
-                        £{userRecord ? ((userRecord.balance ?? 0) + portfolioValue).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
-                      </div>
-                      <div className="text-xs text-gray-600 mt-0.5 flex gap-2">
-                        <span>£{(userRecord?.balance ?? 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} cash</span>
-                        <span>·</span>
-                        <span>£{portfolioValue.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} portfolio</span>
+                      <div className="text-xs text-gray-500 truncate mb-2">{user.email}</div>
+                      <div className="space-y-1">
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs text-gray-500">Cash</span>
+                          <span className="text-sm font-bold text-white tabular-nums">
+                            £{(userRecord?.balance ?? 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs text-gray-500">Portfolio</span>
+                          <span className="text-xs font-medium text-gray-400 tabular-nums">
+                            £{portfolioValue.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center pt-1 border-t border-[#1e2330]">
+                          <span className="text-xs text-gray-500">Total</span>
+                          <span className="text-xs font-semibold text-gray-300 tabular-nums">
+                            £{userRecord ? ((userRecord.balance ?? 0) + portfolioValue).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
+                          </span>
+                        </div>
                       </div>
                     </div>
                     <button

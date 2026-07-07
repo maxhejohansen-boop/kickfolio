@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-route
 import { AuthProvider, useAuth } from './lib/AuthContext'
 import { TutorialProvider } from './lib/TutorialContext'
 import TutorialOverlay from './components/TutorialOverlay'
+import BillWarning from './components/BillWarning'
 import Navbar from './components/Navbar'
 import Landing from './pages/Landing'
 import Login from './pages/Login'
@@ -83,6 +84,7 @@ function AppRoutes() {
         </Routes>
       </div>
       <TutorialOverlay />
+      <BillWarning />
     </div>
   )
 }

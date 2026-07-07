@@ -97,7 +97,7 @@ function weightedPick<T>(items: T[], weightFn: (item: T) => number): T | null {
 }
 
 function generateTeamMatchStats(
-  players: Array<{ id: string; position: string; name: string; current_price: number }>,
+  players: Array<{ id: string; position: string; name: string; current_price: number; next_md_modifier?: string | null }>,
   teamGoals: number,
   opponentGoals: number,
   side: 'home' | 'away',
@@ -144,8 +144,21 @@ function generateTeamMatchStats(
     }
   }
 
-  // Outfield logic: tiered by price
+  // Outfield logic: tiered by price, with tip modifiers applied
   const outfieldSquad: Squad[] = outfield.map((p, rank) => {
+    const modifier = p.next_md_modifier ?? null
+
+    // Injury modifier: high DNP chance
+    if (modifier === 'injury') {
+      if (Math.random() < 0.55) return { id: p.id, position: p.position, plays: false, minutes: 0, dnp_reason: 'Injured' }
+      // If they do play, reduced fitness — treat as fringe
+      rank = Math.min(outfield.length - 1, Math.floor(rank + outfield.length * 0.25))
+    }
+    // Pecking order: push into squad/fringe tier
+    if (modifier === 'pecking_order') {
+      rank = Math.min(outfield.length - 1, Math.floor(rank + outfield.length * 0.35))
+    }
+
     const isfringe = rank >= squadCutoff
     if (isfringe && pickMinutes(rank) === 0) {
       return { id: p.id, position: p.position, plays: false, minutes: 0, dnp_reason: dnpReason() }
@@ -191,15 +204,15 @@ function generateTeamMatchStats(
   for (const p of active) saveTally[p.id] = 0
   if (gk) saveTally[gk.id] = Math.floor(Math.random() * 3) + opponentGoals
 
-  // Goal bonus tables — scaled so hat-tricks push into 9s, 4 goals guarantees 10.0
+  // Goal bonus tables
   const GOAL_BONUS: Record<string, number[]> = {
-    Forward:    [0, 1.5, 3.0, 4.5, 6.0],
-    Midfielder: [0, 1.3, 2.8, 4.2, 5.8],
-    Defender:   [0, 1.8, 3.5, 5.0, 6.5],
+    Forward:    [0, 1.2, 2.0, 3.0, 4.0],
+    Midfielder: [0, 1.2, 2.0, 3.0, 4.0],
+    Defender:   [0, 1.5, 2.5, 3.5, 4.5],
     Goalkeeper: [0, 0,   0,   0,   0  ],
   }
   const ASSIST_BONUS: Record<string, number> = {
-    Forward: 0.8, Midfielder: 0.7, Defender: 0.6, Goalkeeper: 0,
+    Forward: 0.6, Midfielder: 0.6, Defender: 0.5, Goalkeeper: 0,
   }
 
   // Build final stats
@@ -223,8 +236,9 @@ function generateTeamMatchStats(
         + (cs ? 0.5 : 0)
 
     const floor = p.position === 'Goalkeeper' ? 4.5
-      : g >= 3 ? 9.2 : g >= 2 ? 8.2 : g >= 1 ? 7.0 : a >= 1 ? 6.8 : 4.5
-    const rating = parseFloat(Math.min(10, Math.max(floor, base + bonuses)).toFixed(1))
+      : g >= 3 ? 8.5 : g >= 2 ? 7.5 : g >= 1 ? 6.8 : a >= 1 ? 6.5 : 4.5
+    const maxRating = g >= 3 ? 10.0 : g >= 2 ? 9.2 : g >= 1 ? 8.8 : 9.0
+    const rating = parseFloat(Math.min(maxRating, Math.max(floor, base + bonuses)).toFixed(1))
     result.set(p.id, { goals: g, assists: a, rating, minutes: p.minutes, saves: s, clean_sheet: cs, played: true })
   }
   return { stats: result, events }
@@ -463,7 +477,7 @@ Deno.serve(async (req) => {
 
     // ── 3. Load players ─────────────────────────────────────────────────────
     const { data: players, error: playersError } = await supabase
-      .from('players').select('id, name, club, position, current_price')
+      .from('players').select('id, name, club, position, current_price, next_md_modifier')
     if (playersError) throw playersError
 
     // Generate sim fixtures and pre-build per-player stats map
@@ -471,10 +485,10 @@ Deno.serve(async (req) => {
     const simStatsMap = new Map<string, PlayerStats>()
 
     if (simulate) {
-      const byClub = new Map<string, Array<{ id: string; position: string; name: string; current_price: number }>>()
+      const byClub = new Map<string, Array<{ id: string; position: string; name: string; current_price: number; next_md_modifier?: string | null }>>()
       for (const p of (players as any[])) {
         if (!byClub.has(p.club)) byClub.set(p.club, [])
-        byClub.get(p.club)!.push({ id: p.id, position: p.position, name: p.name, current_price: p.current_price })
+        byClub.get(p.club)!.push({ id: p.id, position: p.position, name: p.name, current_price: p.current_price, next_md_modifier: p.next_md_modifier ?? null })
       }
       for (const f of simFixtures) {
         const home = generateTeamMatchStats(byClub.get(f.home) ?? [], f.homeGoals, f.awayGoals, 'home')
@@ -532,6 +546,9 @@ Deno.serve(async (req) => {
     if (dryRun) return json({ dry_run: true, simulate, matchday, simFixtures, log: matchLog })
 
     // ── 4. Write to database ────────────────────────────────────────────────
+    // Clear modifiers that stat generation consumed this matchday
+    await supabase.from('players').update({ next_md_modifier: null }).not('next_md_modifier', 'is', null)
+
     const { error: phError } = await supabase.from('price_history').insert(priceHistoryInserts)
     if (phError) throw phError
 
@@ -615,6 +632,7 @@ Deno.serve(async (req) => {
     }
 
     // ── 7. Scouting focuses ─────────────────────────────────────────────────
+    const insufficientFundsMap = new Map<string, number>() // userId → shortfall amount
     const { data: activeFocuses } = await supabase.from('scouting_focuses').select('*').eq('active', true)
     if (activeFocuses?.length) {
       const userFocusMap = new Map<string, any[]>()
@@ -633,6 +651,10 @@ Deno.serve(async (req) => {
 
         const scoutedSet = new Set((allScouts ?? []).map((s: any) => s.player_id))
         const totalCost = userFocuses.reduce((s, f) => s + Number(f.cost_per_matchday), 0)
+        const preBalance = Number((uRow as any)?.balance ?? 0)
+        const shortfall = Math.max(0, totalCost - preBalance)
+        if (shortfall > 0) insufficientFundsMap.set(userId, shortfall)
+
         const newScouts: any[] = []
 
         for (const focus of userFocuses) {
@@ -653,7 +675,7 @@ Deno.serve(async (req) => {
         if (newScouts.length) {
           await supabase.from('player_scouts').upsert(newScouts, { onConflict: 'user_id,player_id', ignoreDuplicates: true })
         }
-        if (uRow) await supabase.from('users').update({ balance: Math.max(0, (uRow as any).balance - totalCost) }).eq('id', userId)
+        if (uRow) await supabase.from('users').update({ balance: Math.max(0, preBalance - totalCost) }).eq('id', userId)
       }
     }
 
@@ -694,35 +716,66 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Insider tips (random, ~60% accurate, sent to all users)
+    // Insider tips — 3 outcomes:
+    //   30% accurate positive  → true intel, player in form
+    //   30% accurate negative  → real modifier applied + immediate price drop
+    //   40% inaccurate         → false alarm, negative text but no effect
     const tipPool = [...statsInserts].filter((s: any) => s.minutes > 0).sort(() => Math.random() - 0.5).slice(0, 3)
     const tipSenders = ['Deep Throat', 'Anonymous', 'A Friend', 'Reliable Source']
+    const tipModifierUpdates: Array<{ id: string; modifier: string; price: number }> = []
+
     for (const stat of tipPool.slice(0, 2)) {
       const p = playerMap.get(stat.player_id)
       if (!p) continue
-      const isAccurate = Math.random() > 0.4
       const sender = tipSenders[Math.floor(Math.random() * tipSenders.length)]
-      const positiveHints = [
-        `Word from inside ${p.club}'s training ground: ${p.name} has been absolutely electric in sessions this week. Sources close to the camp suggest the coaching staff are particularly happy with their sharpness. Could be one to watch.`,
-        `A contact with access to ${p.club} tells me ${p.name} has been putting in extra hours. When this player is motivated like this, performances tend to follow. Take it as you will.`,
-        `Hearing very interesting things about ${p.name}. My source says they looked sharp, focused, and hungry. Might be worth taking a position before next matchday.`,
-      ]
-      const negativeHints = [
-        `${p.name} reportedly nursing a knock. The club are staying quiet but our source suggests they might not be at full fitness. Consider your exposure carefully.`,
-        `Word is ${p.name} has dropped down the pecking order at ${p.club}. A new setup might limit their opportunities. Not confirmed — worth monitoring.`,
-        `Off-field distractions for ${p.name} this week. Nothing confirmed from the club, but our contact suggests things aren't fully settled.`,
-      ]
-      const hints = isAccurate ? positiveHints : negativeHints
-      const tipBody = hints[Math.floor(Math.random() * hints.length)]
+      const r = Math.random()
+
+      let tipBody: string
+      let isAccurate: boolean
+      let modifierType: 'injury' | 'pecking_order' | null = null
+
+      if (r < 0.30) {
+        isAccurate = true
+        const positiveHints = [
+          `Word from inside ${p.club}'s training ground: ${p.name} has been absolutely electric in sessions this week. Sources close to the camp suggest the coaching staff are particularly happy. Could be one to watch.`,
+          `A contact with access to ${p.club} tells me ${p.name} has been putting in extra hours. When this player is motivated like this, performances tend to follow.`,
+          `Hearing very interesting things about ${p.name}. My source says they looked sharp, focused, and hungry. Might be worth taking a position before next matchday.`,
+        ]
+        tipBody = positiveHints[Math.floor(Math.random() * positiveHints.length)]
+      } else if (r < 0.60) {
+        isAccurate = true
+        modifierType = Math.random() < 0.5 ? 'injury' : 'pecking_order'
+        tipBody = modifierType === 'injury'
+          ? `${p.name} reportedly nursing a knock ahead of matchday ${matchday + 1}. The club are staying quiet, but our source says they're a significant doubt.`
+          : `Word is ${p.name} has dropped down the pecking order at ${p.club}. A new setup is likely to limit their game time next matchday.`
+        const priceDrop = modifierType === 'injury' ? 0.08 : 0.05
+        const newPrice = parseFloat(Math.max(0.5, Number(p.current_price) * (1 - priceDrop)).toFixed(2))
+        tipModifierUpdates.push({ id: p.id as string, modifier: modifierType, price: newPrice })
+      } else {
+        isAccurate = false
+        const negType = Math.random() < 0.5 ? 'injury' : 'pecking_order'
+        tipBody = negType === 'injury'
+          ? `${p.name} reportedly nursing a knock. The club are staying quiet but our source suggests they might not be at full fitness. Consider your exposure carefully.`
+          : negType === 'pecking_order'
+          ? `Word is ${p.name} has dropped down the pecking order at ${p.club}. A new setup might limit their opportunities. Not confirmed — worth monitoring.`
+          : `Off-field distractions for ${p.name} this week. Nothing confirmed from the club, but our contact suggests things aren't fully settled.`
+      }
+
       for (const u of (allUsers ?? [])) {
         inboxMessages.push({
           user_id: u.id, type: 'tip', sender,
           subject: `Re: ${p.name} — matchday ${matchday + 1}`,
           preview: tipBody.slice(0, 100) + '...',
           body: tipBody + '\n\n— [Identity withheld]\n\nDelete this message after reading.',
-          metadata: { player_id: stat.player_id, accurate: isAccurate },
+          metadata: { player_id: stat.player_id, accurate: isAccurate, modifier: modifierType },
         })
       }
+    }
+
+    if (tipModifierUpdates.length) {
+      await Promise.all(tipModifierUpdates.map(({ id, modifier, price }) =>
+        supabase.from('players').update({ next_md_modifier: modifier, current_price: price }).eq('id', id)
+      ))
     }
 
     // Scout reports: scouts revealing this matchday
@@ -817,13 +870,20 @@ Deno.serve(async (req) => {
         if (totalCost <= 0) continue
         const uRow = (allUsers ?? []).find((u: any) => u.id === userId)
         const balance = uRow ? Number((uRow as any).balance) : 0
+        const shortfall = insufficientFundsMap.get(userId) ?? 0
+        const insufficientFunds = shortfall > 0
+        const amountPaid = totalCost - shortfall
         const focusLines = focuses.map((f: any) => `  • ${f.name} — £${Number(f.cost_per_matchday).toFixed(2)}/MD`).join('\n')
-        const body = `Dear Manager,\n\nPlease find your scouting invoice for Matchday ${matchday}.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nACTIVE FOCUS FEES\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n${focusLines}\n\nTOTAL DEDUCTED: £${totalCost.toFixed(2)}\nREMAINING BALANCE: £${balance.toFixed(2)}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nThank you for using Kickfolio's scouting network.\n\nRegards,\nFinance Department\nKickfolio HQ`
+        const body = insufficientFunds
+          ? `Dear Manager,\n\n⚠️  PAYMENT FAILED — INSUFFICIENT FUNDS\n\nYour scouting fees for Matchday ${matchday} could not be fully covered.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nACTIVE FOCUS FEES\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n${focusLines}\n\nAMOUNT DUE:     £${totalCost.toFixed(2)}\nAMOUNT PAID:    £${amountPaid.toFixed(2)}\nSHORTFALL:      £${shortfall.toFixed(2)}\nREMAINING BALANCE: £${balance.toFixed(2)}\n\nPlease top up your balance. Unpaid scout networks may be cancelled.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nRegards,\nFinance Department\nKickfolio HQ`
+          : `Dear Manager,\n\nPlease find your scouting invoice for Matchday ${matchday}.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nACTIVE FOCUS FEES\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n${focusLines}\n\nTOTAL DEDUCTED: £${totalCost.toFixed(2)}\nREMAINING BALANCE: £${balance.toFixed(2)}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nThank you for using Kickfolio's scouting network.\n\nRegards,\nFinance Department\nKickfolio HQ`
         inboxMessages.push({
           user_id: userId, type: 'bill', sender: 'Finance Department',
-          subject: `Scout Bill — Matchday ${matchday}`,
-          preview: `£${totalCost.toFixed(2)} deducted for ${focuses.length} active focus(es) on MD${matchday}`,
-          body, metadata: { matchday, totalCost, focusCount: focuses.length },
+          subject: insufficientFunds ? `⚠️ Payment Failed — Matchday ${matchday}` : `Scout Bill — Matchday ${matchday}`,
+          preview: insufficientFunds
+            ? `Couldn't cover £${totalCost.toFixed(2)} scout fees — £${shortfall.toFixed(2)} short`
+            : `£${totalCost.toFixed(2)} deducted for ${focuses.length} active focus(es) on MD${matchday}`,
+          body, metadata: { matchday, totalCost, focusCount: focuses.length, insufficient_funds: insufficientFunds, shortfall },
         })
       }
     }

@@ -365,6 +365,38 @@ export default function Live() {
     return () => clearInterval(id)
   }, [])
 
+  // Polling fallback: refresh prices + feed every 10s in case realtime drops
+  useEffect(() => {
+    let cancelled = false
+    async function poll() {
+      const { data: statusRow } = await supabase.from('matchday_status').select('status, matchday_number').eq('id', 1).single()
+      if (!statusRow || statusRow.status !== 'live' || cancelled) return
+      const { data: ticks } = await supabase.from('live_ticks').select('player_id, price, price_change_pct, event_text, created_at, id')
+        .order('created_at', { ascending: false }).limit(100)
+      if (cancelled || !ticks?.length) return
+      setLivePrices(prev => {
+        const next = { ...prev }
+        for (const t of ticks) next[t.player_id] = t.price
+        return next
+      })
+      setLiveChanges(prev => {
+        const next = { ...prev }
+        for (const t of ticks) next[t.player_id] = t.price_change_pct
+        return next
+      })
+      setEvents(prev => {
+        const existingIds = new Set(prev.map(e => e.id))
+        const newEvents = ticks
+          .filter(t => t.event_text && !existingIds.has(t.id))
+          .map(t => ({ id: t.id, text: t.event_text, time: t.created_at, player_id: t.player_id }))
+        if (!newEvents.length) return prev
+        return [...newEvents, ...prev].slice(0, 80)
+      })
+    }
+    const id = setInterval(poll, 10_000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [])
+
   // ─── Status — flip to completed client-side the moment the clock hits 0 ───
   const dbStatus  = matchdayStatus?.status
   const endsAt    = matchdayStatus?.ends_at ? new Date(matchdayStatus.ends_at) : null
@@ -375,7 +407,7 @@ export default function Live() {
 
   // Scale real 300s window → 90 match minutes
   const elapsedSecs  = isLive && startedAt ? Math.max(0, (Date.now() - startedAt.getTime()) / 1000) : 0
-  const matchMinute  = Math.min(90, Math.floor(elapsedSecs * 90 / 300))
+  const matchMinute  = Math.min(90, Math.floor(elapsedSecs * 90 / 150))
 
   // ─── Sorting ────────────────────────────────────────────────
   const sorted = isLive

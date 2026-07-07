@@ -24,6 +24,20 @@ export function AuthProvider({ children }) {
     return () => subscription.unsubscribe()
   }, [])
 
+  // Real-time balance updates — fires whenever balance changes from a trade,
+  // limit order fill, or matchday payout, without needing refreshUserRecord().
+  useEffect(() => {
+    if (!user) return
+    const ch = supabase
+      .channel('auth-userrecord')
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'users',
+        filter: `id=eq.${user.id}`,
+      }, ({ new: row }) => setUserRecord(row))
+      .subscribe()
+    return () => { supabase.removeChannel(ch) }
+  }, [user?.id])
+
   async function fetchUserRecord(userId) {
     const { data } = await supabase.from('users').select('*').eq('id', userId).single()
     setUserRecord(data)

@@ -132,7 +132,7 @@ function generatePlayerStat(player: Record<string, unknown>, result: string, all
   const rank = sorted.findIndex(p => p.id === player.id) + 1
   const total = sorted.length
   const pctRank = rank / total
-  const resultMod = result === 'win' ? 0.5 : result === 'draw' ? 0 : -0.3
+  const resultMod = result === 'win' ? 0.3 : result === 'draw' ? 0 : -0.3
 
   // GK chain: #1 plays 93%, #2 only if #1 out, #3 only if both out
   if (player.position === 'Goalkeeper') {
@@ -153,6 +153,19 @@ function generatePlayerStat(player: Record<string, unknown>, result: string, all
     return { ...stat, price_change_pct: calcChangePct(stat) }
   }
 
+  // Apply tip modifiers from previous matchday
+  const modifier = player.next_md_modifier as string | null
+  if (modifier === 'injury') {
+    if (Math.random() < 0.55) {
+      return { goals: 0, assists: 0, saves: 0, rating: null, minutes: 0, clean_sheet: false, dnp_reason: 'Injured', price_change_pct: -2 }
+    }
+    // Still playing but at reduced fitness — treat as fringe player
+    pctRank = Math.min(0.95, pctRank + 0.25)
+  } else if (modifier === 'pecking_order') {
+    // Pushed down the pecking order — treat as squad player regardless of price rank
+    pctRank = Math.min(0.90, pctRank + 0.35)
+  }
+
   // Tiered minutes
   let minutes = 0
   if (pctRank <= 0.30) {
@@ -168,28 +181,28 @@ function generatePlayerStat(player: Record<string, unknown>, result: string, all
 
   if (player.position === 'Forward') {
     const r = Math.random()
-    if      (r < 0.42) goals = 0
-    else if (r < 0.73) goals = 1
-    else if (r < 0.89) goals = 2
+    if      (r < 0.72) goals = 0
+    else if (r < 0.94) goals = 1
+    else if (r < 0.99) goals = 2
     else               goals = 3
-    assists = Math.random() < (goals > 0 ? 0.12 : 0.28) ? 1 : 0
-  } else if (player.position === 'Midfielder') {
-    goals   = Math.random() < 0.22 ? (Math.random() < 0.15 ? 2 : 1) : 0
-    assists = Math.random() < 0.38 ? 1 : 0
-  } else {
-    goals   = Math.random() < 0.10 ? 1 : 0
     assists = Math.random() < 0.18 ? 1 : 0
+  } else if (player.position === 'Midfielder') {
+    goals   = Math.random() < 0.12 ? (Math.random() < 0.08 ? 2 : 1) : 0
+    assists = Math.random() < 0.22 ? 1 : 0
+  } else {
+    goals   = Math.random() < 0.05 ? 1 : 0
+    assists = Math.random() < 0.12 ? 1 : 0
     clean_sheet = result === 'win' ? Math.random() < 0.45 : result === 'draw' ? Math.random() < 0.30 : Math.random() < 0.05
   }
 
   // Rating computed AFTER goals/assists so scorers always get high ratings
-  const GOAL_BONUS = goals >= 3 ? 4.0 : goals === 2 ? 2.5 : goals === 1 ? 1.5 : 0
-  const ASSIST_BONUS = assists * 0.7
+  const GOAL_BONUS = goals >= 3 ? 3.0 : goals === 2 ? 2.0 : goals === 1 ? 1.2 : 0
+  const ASSIST_BONUS = assists * 0.6
   const CS_BONUS = clean_sheet ? 0.4 : 0
   const base = 6.0 + Math.random() * 1.4 + resultMod + GOAL_BONUS + ASSIST_BONUS + CS_BONUS
-  // Hard floors: can't score 3 and get a 6; can't assist and get below 6.8
-  const floor = goals >= 3 ? 9.2 : goals >= 2 ? 8.2 : goals >= 1 ? 7.0 : assists >= 1 ? 6.8 : 4.0
-  const rating = parseFloat(Math.max(floor, Math.min(10, base)).toFixed(2))
+  const floor = goals >= 3 ? 8.5 : goals >= 2 ? 7.5 : goals >= 1 ? 6.8 : assists >= 1 ? 6.5 : 4.0
+  const maxRating = goals >= 3 ? 10.0 : goals >= 2 ? 9.2 : goals >= 1 ? 8.8 : 8.0
+  const rating = parseFloat(Math.max(floor, Math.min(maxRating, base)).toFixed(2))
 
   const stat = { goals, assists, saves: 0, rating, minutes, clean_sheet, dnp_reason: null }
   return { ...stat, price_change_pct: calcChangePct(stat) }
@@ -245,16 +258,15 @@ async function runLiveMatchday(matchday: number, players: Record<string, unknown
   await delay(5_000)
 
   for (let wave = 0; wave < WAVES; wave++) {
-    if (wave > 0) await delay(60_000)
+    if (wave > 0) await delay(20_000)
 
     const batch = allStats.slice(wave * waveSize, (wave + 1) * waveSize)
     const lo = wave * 18 + 1
     const hi = Math.min(90, (wave + 1) * 18)
     console.log(`[Live] Wave ${wave + 1}/${WAVES}: ${batch.length} players (${lo}'–${hi}')`)
 
-    // Phase 1: update prices + stats + price ticks concurrently
+    // All updates fire concurrently — price, stats, and tick in one batch per player
     const updates: Promise<unknown>[] = []
-    const eventQueue: Array<{ player_id: string; price: number; chg: number; text: string }> = []
 
     for (let i = 0; i < batch.length; i++) {
       const { player, stat } = batch[i]
@@ -264,10 +276,9 @@ async function runLiveMatchday(matchday: number, players: Record<string, unknown
       // Spread minutes evenly across the wave range based on position in shuffled batch
       const fraction = batch.length > 1 ? i / (batch.length - 1) : 0.5
       const minute = Math.round(lo + fraction * (hi - lo))
+      const text = eventText(player.name as string, { ...stat, price_change_pct: chg }, newPrice, wave, minute)
 
-      updates.push(
-        supabase.from('players').update({ current_price: newPrice }).eq('id', player.id)
-      )
+      updates.push(supabase.from('players').update({ current_price: newPrice }).eq('id', player.id))
       updates.push(
         supabase.from('matchday_stats').insert({
           player_id: player.id,
@@ -282,36 +293,24 @@ async function runLiveMatchday(matchday: number, players: Record<string, unknown
           price_change_pct: chg,
         })
       )
-      // Price-only tick fires immediately so cards flash and update live
       updates.push(
         supabase.from('live_ticks').insert({
           player_id: player.id,
           price: newPrice,
           price_change_pct: chg,
-          event_text: null,
+          event_text: text,
         })
       )
-
-      const text = eventText(player.name as string, { ...stat, price_change_pct: chg }, newPrice, wave, minute)
-      if (text) eventQueue.push({ player_id: player.id as string, price: newPrice, chg, text })
     }
 
     await Promise.all(updates)
-
-    // Phase 2: insert event ticks sequentially so feed events trickle in one by one
-    for (const ev of eventQueue) {
-      await delay(1_500)
-      await supabase.from('live_ticks').insert({
-        player_id: ev.player_id,
-        price: ev.price,
-        price_change_pct: ev.chg,
-        event_text: ev.text,
-      })
-    }
   }
 
-  // Wait out the remaining window
-  await delay(60_000)
+  // Wait for matchday window to close before finalizing
+  await delay(20_000)
+
+  // Clear modifiers that were applied during this matchday's stat generation
+  await supabase.from('players').update({ next_md_modifier: null }).not('next_md_modifier', 'is', null)
 
   // Finalize
   const { data: finalPlayers } = await supabase.from('players').select('id, current_price')
@@ -444,33 +443,67 @@ async function runLiveMatchday(matchday: number, players: Record<string, unknown
     }
   }
 
-  // Insider tips
+  // Insider tips — 3 outcomes:
+  //   30% accurate positive  → true intel, player looks good next MD
+  //   30% accurate negative  → true intel, player gets a modifier (injury/pecking order) + immediate price drop
+  //   40% inaccurate         → false alarm, negative text but no effect
   const tipPool = statsArray.filter((s: any) => (s.minutes ?? 0) > 0).sort(() => Math.random() - 0.5).slice(0, 3)
   const tipSenders = ['Deep Throat', 'Anonymous', 'A Friend', 'Reliable Source']
+  const modifierUpdates: Array<{ id: string; modifier: string; price: number }> = []
+
   for (const stat of tipPool.slice(0, 2)) {
     const p = playerMap.get(stat.player_id) as any
     if (!p) continue
-    const isAccurate = Math.random() > 0.4
     const sender = tipSenders[Math.floor(Math.random() * tipSenders.length)]
-    const positiveHints = [
-      `Word from inside ${p.club}'s training ground: ${p.name} has been absolutely electric in sessions this week. Could be one to watch next matchday.`,
-      `A contact with access to ${p.club} tells me ${p.name} has been putting in extra hours. When this player is motivated like this, performances tend to follow.`,
-    ]
-    const negativeHints = [
-      `${p.name} reportedly nursing a knock. The club are staying quiet but our source suggests they might not be at full fitness.`,
-      `Word is ${p.name} has dropped down the pecking order at ${p.club}. A new setup might limit their opportunities going forward.`,
-    ]
-    const hints = isAccurate ? positiveHints : negativeHints
-    const tipBody = hints[Math.floor(Math.random() * hints.length)]
+    const r = Math.random()
+
+    let tipBody: string
+    let isAccurate: boolean
+    let modifierType: 'injury' | 'pecking_order' | null = null
+
+    if (r < 0.30) {
+      // Accurate positive
+      isAccurate = true
+      const positiveHints = [
+        `Word from inside ${p.club}'s training ground: ${p.name} has been absolutely electric in sessions this week. Could be one to watch next matchday.`,
+        `A contact with access to ${p.club} tells me ${p.name} has been putting in extra hours. When this player is motivated like this, performances tend to follow.`,
+      ]
+      tipBody = positiveHints[Math.floor(Math.random() * positiveHints.length)]
+    } else if (r < 0.60) {
+      // Accurate negative — real intel, apply modifier + price drop
+      isAccurate = true
+      modifierType = Math.random() < 0.5 ? 'injury' : 'pecking_order'
+      tipBody = modifierType === 'injury'
+        ? `${p.name} reportedly nursing a knock ahead of matchday ${matchday + 1}. The club are staying quiet, but our source says they're a significant doubt.`
+        : `Word is ${p.name} has dropped down the pecking order at ${p.club}. A new setup is likely to limit their game time next matchday.`
+      const priceDrop = modifierType === 'injury' ? 0.08 : 0.05
+      const newPrice = parseFloat(Math.max(0.5, Number(p.current_price) * (1 - priceDrop)).toFixed(2))
+      modifierUpdates.push({ id: p.id, modifier: modifierType, price: newPrice })
+    } else {
+      // Inaccurate — false alarm, looks negative but no effect
+      isAccurate = false
+      const negType = Math.random() < 0.5 ? 'injury' : 'pecking_order'
+      tipBody = negType === 'injury'
+        ? `${p.name} reportedly nursing a knock. The club are staying quiet but our source suggests they might not be at full fitness.`
+        : `Word is ${p.name} has dropped down the pecking order at ${p.club}. A new setup might limit their opportunities going forward.`
+    }
+
     for (const u of (allUsers ?? [])) {
       inboxMessages.push({
         user_id: (u as any).id, type: 'tip', sender,
         subject: `Re: ${p.name} — matchday ${matchday + 1}`,
         preview: tipBody.slice(0, 100) + '...',
         body: tipBody + '\n\n— [Identity withheld]\n\nDelete this message after reading.',
-        metadata: { player_id: stat.player_id, accurate: isAccurate },
+        metadata: { player_id: stat.player_id, accurate: isAccurate, modifier: modifierType },
       })
     }
+  }
+
+  // Apply accurate negative tip effects: price drop + modifier for next matchday
+  if (modifierUpdates.length) {
+    await Promise.all(modifierUpdates.map(({ id, modifier, price }) =>
+      supabase.from('players').update({ next_md_modifier: modifier, current_price: price }).eq('id', id)
+    ))
   }
 
   // Scout reports: scouts revealing this matchday
@@ -702,12 +735,15 @@ Deno.serve(async (req: Request) => {
     await supabase.from('matchday_status').upsert({
       id: 1, status: 'live', matchday_number: matchday,
       started_at: now.toISOString(),
-      ends_at: new Date(now.getTime() + 5 * 60_000).toISOString(),
+      ends_at: new Date(now.getTime() + 150_000).toISOString(),
     })
     await supabase.from('live_ticks').delete().gte('created_at', '2000-01-01')
 
-    // Run the 5-minute matchday (blocks for ~300 s — pg_net is fire-and-forget so that's fine)
-    await runLiveMatchday(matchday, players)
+    // Fire the 5-minute matchday in the background and return immediately.
+    // EdgeRuntime.waitUntil keeps the function alive after the HTTP response is sent.
+    const matchdayPromise = runLiveMatchday(matchday, players)
+    // @ts-ignore – available in Supabase's Deno runtime
+    EdgeRuntime.waitUntil(matchdayPromise)
 
     return new Response(
       JSON.stringify({ ok: true, matchday }),

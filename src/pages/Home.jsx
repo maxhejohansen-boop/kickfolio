@@ -45,9 +45,9 @@ export default function Home() {
 
       <div className="mt-16 grid grid-cols-3 gap-6 sm:gap-10 text-center">
         {[
-          { value: '20', label: 'PL Players' },
+          { value: '170+', label: 'PL Players' },
           { value: '£100k', label: 'Starting Cash' },
-          { value: '24h', label: 'Matchday Cycle' },
+          { value: 'Daily', label: 'Matchday' },
         ].map(({ value, label }) => (
           <div key={label}>
             <div className="text-2xl font-bold text-white">{value}</div>

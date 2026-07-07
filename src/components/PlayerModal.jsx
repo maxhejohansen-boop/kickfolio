@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from 'recharts'
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthContext'
 import { useTutorial } from '../lib/TutorialContext'
@@ -12,7 +12,7 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
   const { user, userRecord, refreshUserRecord } = useAuth()
   const tutorial = useTutorial()
   const [priceByMatchday, setPriceByMatchday] = useState({})
-  const [recentChart, setRecentChart] = useState([])
+  const [priceChart, setPriceChart] = useState([])   // { label, matchday, price, type, goals, assists, rating, minutes, changePct, event }
   const [allStats, setAllStats] = useState([])
   const [shares, setShares] = useState(1)
   const [holding, setHolding] = useState(null)
@@ -40,11 +40,10 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
     return () => { document.body.style.overflow = '' }
   }, [player.id])
 
-  // During live matchday, subscribe to this player's stats being inserted/updated
+  // Subscribe to stats, live ticks, and player price changes for real-time chart updates
   useEffect(() => {
-    if (!isLive) return
     const ch = supabase
-      .channel(`modal-stats-${player.id}`)
+      .channel(`modal-player-${player.id}`)
       .on('postgres_changes', {
         event: 'INSERT', schema: 'public', table: 'matchday_stats',
         filter: `player_id=eq.${player.id}`,
@@ -60,9 +59,45 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
       }, ({ new: row }) => {
         setAllStats(prev => prev.map(s => s.matchday === row.matchday ? row : s))
       })
+      .on('postgres_changes', {
+        event: 'INSERT', schema: 'public', table: 'live_ticks',
+        filter: `player_id=eq.${player.id}`,
+      }, ({ new: tick }) => {
+        setPriceChart(prev => {
+          const history = prev.filter(p => p.type === 'history')
+          const lastMD = history.length > 0 ? Math.max(...history.map(p => p.matchday)) : 0
+          return [...history, {
+            label: 'Live',
+            matchday: lastMD + 1,
+            price: Number(tick.price),
+            type: 'live',
+            goals: null, assists: null, rating: null, minutes: null,
+            changePct: Number(tick.price_change_pct),
+            event: tick.event_text,
+          }]
+        })
+      })
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'players',
+        filter: `id=eq.${player.id}`,
+      }, ({ new: row }) => {
+        // Tip-triggered price drop — only update "current" when no live match is running
+        setPriceChart(prev => {
+          if (prev.some(p => p.type === 'live')) return prev
+          const history = prev.filter(p => p.type === 'history')
+          const lastMD = history.length > 0 ? Math.max(...history.map(p => p.matchday)) : 0
+          return [...history, {
+            label: 'Now',
+            matchday: lastMD + 0.5,
+            price: Number(row.current_price),
+            type: 'current',
+            goals: null, assists: null, rating: null, minutes: null, changePct: null, event: null,
+          }]
+        })
+      })
       .subscribe()
     return () => { supabase.removeChannel(ch) }
-  }, [player.id, isLive])
+  }, [player.id])
 
   async function fetchData() {
     const [historyRes, holdingRes, statsRes, limitRes, scoutRes, mdRes, pendingScoutsRes] = await Promise.all([
@@ -115,18 +150,35 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
     const stats = statsRes.data ?? []
     setAllStats(stats)
 
-    const last5 = [...stats].slice(0, 5).reverse()
-    setRecentChart(last5.map(s => ({
-      matchday: s.matchday,
-      rating: s.minutes > 0 ? (s.rating ?? 0) : null,
-      goals: s.goals ?? 0,
-      assists: s.assists ?? 0,
-      saves: s.saves ?? 0,
-      clean_sheet: s.clean_sheet ?? false,
-      minutes: s.minutes ?? 0,
-      dnp_reason: s.dnp_reason ?? null,
-      price: priceMap[s.matchday] ?? null,
-    })))
+    // Build price chart: all historical matchday prices + current price as final point
+    const historyPoints = (historyRes.data ?? []).map(h => {
+      const s = stats.find(st => st.matchday === h.matchday)
+      return {
+        label: `MD${h.matchday}`,
+        matchday: h.matchday,
+        price: Number(h.price),
+        type: 'history',
+        goals: s?.goals ?? null,
+        assists: s?.assists ?? null,
+        saves: s?.saves ?? null,
+        rating: s?.rating ?? null,
+        minutes: s?.minutes ?? null,
+        clean_sheet: s?.clean_sheet ?? false,
+        dnp_reason: s?.dnp_reason ?? null,
+        changePct: s ? Number(s.price_change_pct) : null,
+        event: null,
+      }
+    })
+    const lastMD = historyPoints.length > 0 ? Math.max(...historyPoints.map(p => p.matchday)) : 0
+    const currentPoint = {
+      label: historyPoints.length > 0 ? 'Now' : 'Start',
+      matchday: lastMD + 0.5,
+      price: Number(player.current_price),
+      type: 'current',
+      goals: null, assists: null, saves: null, rating: null, minutes: null,
+      clean_sheet: false, dnp_reason: null, changePct: null, event: null,
+    }
+    setPriceChart([...historyPoints, currentPoint])
   }
 
   async function handleTrade() {
@@ -350,67 +402,72 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
     ? ((player.current_price - prevMatchdayPrice) / prevMatchdayPrice) * 100
     : null
 
-  const PerformanceTooltip = ({ active, payload }) => {
+  const PriceTooltip = ({ active, payload }) => {
     if (!active || !payload?.length) return null
     const d = payload[0].payload
-    if (d.minutes === 0) {
-      return (
-        <div className="bg-[#161a21] border border-[#1e2330] rounded-lg px-3 py-2.5 text-xs space-y-1 min-w-[160px]">
-          <div className="text-gray-400 font-medium">Matchday {d.matchday}</div>
-          <div className="text-orange-400 font-semibold">Did not play</div>
-          {d.dnp_reason && <div className="text-gray-400">{d.dnp_reason}</div>}
-          {d.price != null && (
-            <div className="flex justify-between gap-4 pt-1 border-t border-[#1e2330]">
-              <span className="text-gray-500">Share price</span>
-              <span className="text-green-400 font-semibold">£{Number(d.price).toFixed(2)}</span>
-            </div>
-          )}
-        </div>
-      )
-    }
+    const prevPrice = (() => {
+      const idx = priceChart.indexOf(d)
+      if (idx <= 0) return null
+      return priceChart[idx - 1].price
+    })()
+    const changeAmt = prevPrice != null ? d.price - prevPrice : null
+    const changePct = prevPrice != null ? ((d.price - prevPrice) / prevPrice) * 100 : null
+
     return (
-      <div className="bg-[#161a21] border border-[#1e2330] rounded-lg px-3 py-2.5 text-xs space-y-1 min-w-[130px]">
-        <div className="text-gray-400 font-medium">Matchday {d.matchday}</div>
-        <div className="flex justify-between gap-4">
-          <span className="text-gray-500">Rating</span>
-          <span className="text-white font-semibold">{Number(d.rating).toFixed(1)}</span>
+      <div className="bg-[#161a21] border border-[#1e2330] rounded-lg px-3 py-2.5 text-xs space-y-1 min-w-[150px]">
+        <div className="flex items-center gap-2">
+          {d.type === 'live' && <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse flex-shrink-0" />}
+          <span className="text-gray-400 font-medium">{d.label}</span>
         </div>
-        {isGK ? (
-          <>
-            <div className="flex justify-between gap-4">
-              <span className="text-gray-500">Saves</span>
-              <span className="text-white">{d.saves}</span>
-            </div>
-            <div className="flex justify-between gap-4">
-              <span className="text-gray-500">Clean sheet</span>
-              <span className={d.clean_sheet ? 'text-green-400' : 'text-gray-400'}>{d.clean_sheet ? 'Yes' : 'No'}</span>
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="flex justify-between gap-4">
-              <span className="text-gray-500">Goals</span>
-              <span className="text-white">{d.goals}</span>
-            </div>
-            <div className="flex justify-between gap-4">
-              <span className="text-gray-500">Assists</span>
-              <span className="text-white">{d.assists}</span>
-            </div>
-          </>
-        )}
-        {d.price != null && (
-          <div className="flex justify-between gap-4 pt-1 border-t border-[#1e2330]">
-            <span className="text-gray-500">Share price</span>
-            <span className="text-green-400 font-semibold">£{Number(d.price).toFixed(2)}</span>
+        <div className="flex justify-between gap-4">
+          <span className="text-gray-500">Price</span>
+          <span className="text-white font-semibold">£{Number(d.price).toFixed(2)}</span>
+        </div>
+        {changePct != null && (
+          <div className="flex justify-between gap-4">
+            <span className="text-gray-500">Change</span>
+            <span className={changePct > 0 ? 'text-green-400' : changePct < 0 ? 'text-red-400' : 'text-gray-500'}>
+              {changePct > 0 ? '+' : ''}£{Math.abs(changeAmt).toFixed(2)} ({changePct > 0 ? '+' : ''}{changePct.toFixed(1)}%)
+            </span>
           </div>
+        )}
+        {d.type === 'history' && d.minutes != null && d.minutes > 0 && (
+          <div className="border-t border-[#1e2330] pt-1 space-y-1">
+            {d.rating != null && (
+              <div className="flex justify-between gap-4">
+                <span className="text-gray-500">Rating</span>
+                <span className="text-white">{Number(d.rating).toFixed(1)}</span>
+              </div>
+            )}
+            {isGK ? (
+              <>
+                {d.saves != null && <div className="flex justify-between gap-4"><span className="text-gray-500">Saves</span><span className="text-white">{d.saves}</span></div>}
+                <div className="flex justify-between gap-4"><span className="text-gray-500">Clean sheet</span><span className={d.clean_sheet ? 'text-green-400' : 'text-gray-400'}>{d.clean_sheet ? 'Yes' : 'No'}</span></div>
+              </>
+            ) : (
+              <>
+                {d.goals != null && <div className="flex justify-between gap-4"><span className="text-gray-500">Goals</span><span className="text-white">{d.goals}</span></div>}
+                {d.assists != null && <div className="flex justify-between gap-4"><span className="text-gray-500">Assists</span><span className="text-white">{d.assists}</span></div>}
+              </>
+            )}
+          </div>
+        )}
+        {d.type === 'history' && d.minutes === 0 && (
+          <div className="border-t border-[#1e2330] pt-1">
+            <span className="text-orange-400">Did not play{d.dnp_reason ? ` — ${d.dnp_reason}` : ''}</span>
+          </div>
+        )}
+        {d.event && (
+          <div className="border-t border-[#1e2330] pt-1 text-gray-300 italic">{d.event}</div>
         )}
       </div>
     )
   }
 
-  const validRatings = recentChart.map(d => d.rating).filter(r => r != null)
-  const ratingMin = validRatings.length ? Math.max(0, Math.min(...validRatings) - 1) : 0
-  const ratingMax = validRatings.length ? Math.min(10, Math.max(...validRatings) + 1) : 10
+  const priceValues = priceChart.map(p => p.price).filter(Boolean)
+  const priceMin = priceValues.length ? Math.max(0, Math.min(...priceValues) * 0.93) : 0
+  const priceMax = priceValues.length ? Math.max(...priceValues) * 1.07 : 10
+  const priceUp = priceValues.length >= 2 && priceValues[priceValues.length - 1] >= priceValues[0]
 
   const gradeBreakdown = gradeData && (() => {
     // Locked state: not scouted at all
@@ -596,55 +653,63 @@ export default function PlayerModal({ player, onClose, onTrade, defaultMode = 'b
         <StatPill label="Avg rating" value={avgRating > 0 ? avgRating.toFixed(1) : '—'} highlight />
       </div>
 
-      {recentChart.length > 0 ? (
+      {priceChart.length > 0 ? (
         <div>
-          <div className="text-xs text-gray-500 mb-2 font-medium">Last {recentChart.length} matchdays · Rating</div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs text-gray-500 font-medium">Share price history</span>
+            {priceChart.some(p => p.type === 'live') && (
+              <span className="flex items-center gap-1.5 text-xs text-red-400 font-medium">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
+                Live
+              </span>
+            )}
+          </div>
           <div className="h-44">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={recentChart} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+              <LineChart data={priceChart} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e2330" />
                 <XAxis
-                  dataKey="matchday"
+                  dataKey="label"
                   tick={{ fill: '#8892a4', fontSize: 10 }}
                   tickLine={false}
                   axisLine={false}
-                  tickFormatter={v => `MD${v}`}
                 />
                 <YAxis
-                  domain={[ratingMin, ratingMax]}
+                  domain={[priceMin, priceMax]}
                   tick={{ fill: '#8892a4', fontSize: 10 }}
                   tickLine={false}
                   axisLine={false}
-                  width={28}
+                  width={36}
+                  tickFormatter={v => `£${Number(v).toFixed(0)}`}
                 />
-                <ReferenceLine y={6} stroke="#1e2330" strokeDasharray="4 4" />
-                <Tooltip content={<PerformanceTooltip />} />
+                <Tooltip content={<PriceTooltip />} />
                 <Line
                   type="monotone"
-                  dataKey="rating"
-                  stroke="#22c55e"
+                  dataKey="price"
+                  stroke={priceUp ? '#22c55e' : '#f87171'}
                   strokeWidth={2}
-                  dot={{ fill: '#22c55e', r: 4, strokeWidth: 0 }}
-                  activeDot={{ r: 5, fill: '#4ade80' }}
+                  dot={(props) => {
+                    const { cx, cy, payload, key } = props
+                    if (payload.type === 'live') {
+                      return <circle key={key} cx={cx} cy={cy} r={5} fill="#f87171" stroke="#111318" strokeWidth={2} />
+                    }
+                    if (payload.type === 'current') {
+                      return <circle key={key} cx={cx} cy={cy} r={5} fill={priceUp ? '#22c55e' : '#f87171'} stroke="#111318" strokeWidth={2} />
+                    }
+                    if (payload.minutes === 0) {
+                      return <circle key={key} cx={cx} cy={cy} r={3} fill="#fb923c" stroke="none" />
+                    }
+                    return <circle key={key} cx={cx} cy={cy} r={3} fill={priceUp ? '#22c55e' : '#f87171'} stroke="none" />
+                  }}
+                  activeDot={{ r: 5 }}
                 />
               </LineChart>
             </ResponsiveContainer>
           </div>
-          {recentChart.filter(d => d.minutes === 0).length > 0 && (
-            <div className="mt-3 space-y-1">
-              {recentChart.filter(d => d.minutes === 0).map(d => (
-                <div key={d.matchday} className="flex items-center gap-2 text-xs">
-                  <span className="text-gray-600">MD{d.matchday}</span>
-                  <span className="text-orange-400 font-medium">Did not play</span>
-                  {d.dnp_reason && <span className="text-gray-500">— {d.dnp_reason}</span>}
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       ) : (
         <div className="h-20 flex items-center justify-center text-xs text-gray-600">
-          No match data yet
+          No price data yet
         </div>
       )}
 

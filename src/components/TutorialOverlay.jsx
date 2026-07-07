@@ -2,28 +2,30 @@ import { useState, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { useTutorial } from '../lib/TutorialContext'
 
-const TOTAL = 11
+const TOTAL = 13
 const PAD = 14
 
 const STEP_TARGETS = {
   1: null, 2: 'balance', 3: 'market-grid', 4: 'player-card', 5: 'grade-badge',
-  6: 'market-filters', 7: null, 8: 'portfolio-table', 9: 'leaderboard-table',
-  10: 'matchday-info', 11: null,
+  6: 'market-filters', 7: null, 8: 'portfolio-table', 9: null, 10: null,
+  11: 'matchday-info', 12: 'leaderboard-table', 13: null,
 }
 
 const MESSAGES = {
-  1:    "Hi! I'm Bobby. Welcome to Kickfolio — the place where football players are stocks and every match moves the market. Give me two minutes and I'll show you around. Ready?",
-  2:    "This is your bank — £100,000 to start. Every trade you make will change this number. Grow it, and you climb the leaderboard.",
-  3:    "This is the Market. Every player here is a share you can buy. Each one has a live price that moves after every matchday based on how they actually performed.",
-  4:    "Each card shows a player's current price, their recent form chart, and their stats. Green line = price going up. Red line = trouble.",
-  5:    "See this letter? That's the grade. It tells you if a player is a smart buy right now. A = Strong Buy. B = Buy. C = Fair Value. D = Overvalued. I calculate it from their recent form vs their price.",
-  6:    "Filter by position or grade. Sort by price, recent change, goals — whatever matters to you.",
+  1:    "Hi! I'm Bobby. Welcome to Kickfolio — the place where football players are stocks and every match moves the market. Give me two minutes and I'll show you the ropes. Ready?",
+  2:    "This is your Cash — £100,000 to start. It updates live every time you buy or sell. Click it to see the full breakdown: cash available, portfolio value, and total wealth.",
+  3:    "This is the Market. Every player here is a share you can buy. Prices move after every matchday based on real performances — goals, assists, clean sheets.",
+  4:    "Each card shows a player's current price and recent stats. Click one to open their profile — you'll see a full price history chart that updates live during matches and when tips hit.",
+  5:    "See this letter? That's my grade — whether the player looks like good value right now. A = Strong Buy. B = Buy. C = Fair Value. D = Overvalued. You'll need to scout a player to unlock it.",
+  6:    "Filter by position, grade, or price range. Sort by recent change to spot who's trending. This is how you find the edge.",
   '7a': "Let's make your first trade. Click any player card to open it.",
-  '7b': "Here's the full view — price chart, stats, form. Try buying 1 share to see how it works. Don't worry, you can always sell later.",
-  8:    "Boom — you're a shareholder! This is your Portfolio. Every player you own lives here with their P&L (profit and loss). Green means you're up. Red means... learning experience.",
-  9:    "This is where it gets competitive. Every user is ranked by their total portfolio value. Climb the ladder, become a legend.",
-  10:   "Matchdays happen automatically. When one runs, every player's stats update and their price moves. That's when your portfolio really comes alive.",
-  11:   "You're all set! Buy smart, sell smarter, and check back after every matchday. If you ever want me to walk you through again, hit 'Take the tour' in the menu. Good luck, gaffer!",
+  '7b': "Here's the full view — price chart, grade breakdown, and stats. The Actions tab lets you set limit orders too: auto-buy when a price drops to a target, or auto-sell at a peak. Try buying 1 share first.",
+  8:    "This is your Portfolio — every share you own, their P&L, and your total value. Use the Actions tab on each holding to manage limit orders and review your position.",
+  9:    "This is your Inbox. After every matchday you'll get tips — some accurate, some false alarms. An injury tip or 'dropped down the pecking order' can tank a player's price before the next match. Reading your messages is part of the game.",
+  10:   "Scouting is how you research players before prices move. Send scouts for £150 — they report back next matchday with a grade reveal. Pay £500 for an instant result. You've got 3 scout slots, so pick your targets carefully.",
+  11:   "When a matchday goes live, hit the Live page in the nav. Prices update in real-time as goals go in and stats come through. Fast decisions on matchday can be big wins.",
+  12:   "Every user is ranked by their total portfolio value. Climb the ladder, become a legend.",
+  13:   "You're all set! Buy smart, read your tips, scout before you spend, and watch the Live page on matchday. Hit 'Take the tour' in the menu any time to revisit. Good luck, gaffer!",
 }
 
 function Bobby({ celebrate }) {
@@ -111,7 +113,7 @@ export default function TutorialOverlay() {
 
   const msg = step === 7 ? (subStep === 0 ? MESSAGES['7a'] : MESSAGES['7b']) : MESSAGES[step]
   const isFirst = step === 1
-  const isLast = step === 11
+  const isLast = step === 13
   const isInteractive = step === 7
   const showBack = !isFirst && !isInteractive
   const showNext = !isInteractive
