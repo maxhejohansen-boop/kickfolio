@@ -22,13 +22,14 @@ export default function Portfolio() {
   const [teamFilter, setTeamFilter] = useState('All')
   const [totalDividends, setTotalDividends] = useState(0)
   const [recentDividends, setRecentDividends] = useState([])
+  const [suggestedPlayers, setSuggestedPlayers] = useState([])
 
   useEffect(() => {
     if (user) fetchHoldings()
   }, [user])
 
   async function fetchHoldings() {
-    const [holdingsRes, divRes, recentDivRes] = await Promise.all([
+    const [holdingsRes, divRes, recentDivRes, suggestRes] = await Promise.all([
       supabase.from('portfolios').select('*, players(*)').eq('user_id', user.id).gt('shares', 0),
       supabase.from('dividend_payments').select('total_payment').eq('user_id', user.id),
       supabase.from('dividend_payments')
@@ -36,11 +37,20 @@ export default function Portfolio() {
         .eq('user_id', user.id)
         .order('paid_at', { ascending: false })
         .limit(8),
+      supabase.from('players').select('*').order('current_price', { ascending: false }),
     ])
     setHoldings(holdingsRes.data ?? [])
     const divTotal = (divRes.data ?? []).reduce((s, r) => s + Number(r.total_payment), 0)
     setTotalDividends(divTotal)
     setRecentDividends(recentDivRes.data ?? [])
+
+    // One suggestion per position for the empty-state "start your squad" panel
+    const allPlayers = suggestRes.data ?? []
+    const picks = ['Forward', 'Midfielder', 'Defender']
+      .map(pos => allPlayers.find(p => p.position === pos))
+      .filter(Boolean)
+    setSuggestedPlayers(picks)
+
     setLoading(false)
   }
 
@@ -115,14 +125,59 @@ export default function Portfolio() {
           ))}
         </div>
       ) : holdings.length === 0 ? (
-        <div className="text-center py-16 text-gray-500">
-          <p>You don't own any players yet. Head to the Market to start investing.</p>
-          <Link to="/market" className="text-green-400 hover:underline text-sm mt-2 block">
-            Go to Market →
-          </Link>
+        <div>
+          <div className="text-center mb-6">
+            <div className="text-4xl mb-3">📋</div>
+            <h2 className="text-lg font-bold text-white mb-1">Start your squad</h2>
+            <p className="text-gray-500 text-sm">You haven't invested yet. Here are three players to get you started.</p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+            {suggestedPlayers.map(player => (
+              <button
+                key={player.id}
+                onClick={() => openModal(player)}
+                className="bg-[#111318] border border-[#1e2330] hover:border-green-500/40 rounded-xl p-4 text-left transition-all group"
+              >
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="w-10 h-10 rounded-full bg-[#1e2330] overflow-hidden flex-shrink-0">
+                    {player.image_url && (
+                      <img src={player.image_url} alt={player.name} className="w-full h-full object-cover object-top" onError={e => { e.target.style.display = 'none' }} />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-white truncate group-hover:text-green-300 transition-colors">{player.name}</div>
+                    <div className="text-xs text-gray-500">{player.club} · {player.position}</div>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-lg font-bold text-white">£{Number(player.current_price).toFixed(2)}</span>
+                  <span className="text-xs font-semibold text-green-400 bg-green-500/10 border border-green-500/20 rounded-full px-3 py-1 group-hover:bg-green-500/20 transition-colors">
+                    Buy →
+                  </span>
+                </div>
+              </button>
+            ))}
+          </div>
+          <div className="text-center">
+            <Link to="/market" className="text-sm text-gray-500 hover:text-white transition-colors">
+              Browse all players in the Market →
+            </Link>
+          </div>
         </div>
       ) : (
         <>
+          {holdings.length < 3 && (
+            <div className="flex items-start gap-3 bg-amber-500/8 border border-amber-500/20 rounded-xl px-4 py-3 mb-4">
+              <span className="text-amber-400 text-base mt-0.5 flex-shrink-0">⚠</span>
+              <div className="flex-1 min-w-0">
+                <span className="text-sm text-amber-300 font-medium">Your squad looks thin.</span>
+                <span className="text-sm text-amber-400/70"> Owning just {holdings.length} player{holdings.length === 1 ? '' : 's'} concentrates your risk — consider diversifying before the next matchday.</span>
+              </div>
+              <Link to="/market" className="text-xs font-semibold text-amber-400 hover:text-amber-300 whitespace-nowrap flex-shrink-0 transition-colors">
+                Go to Market →
+              </Link>
+            </div>
+          )}
           <div className="flex flex-wrap gap-2 mb-4 overflow-x-auto pb-1">
             {TEAMS.map(({ label, club }) => (
               <button

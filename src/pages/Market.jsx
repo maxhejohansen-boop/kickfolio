@@ -1,8 +1,33 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthContext'
 import PlayerCard from '../components/PlayerCard'
 import { calcGrade, GRADE_META } from '../lib/gradeCalc'
+
+function getNextMatchday15() {
+  const now = new Date()
+  for (let ahead = 0; ahead <= 1; ahead++) {
+    const probe = new Date(now.getTime() + ahead * 86_400_000)
+    const lisbonDate = probe.toLocaleDateString('sv', { timeZone: 'Europe/Lisbon' })
+    const noon = new Date(lisbonDate + 'T12:00:00Z')
+    const offsetMin = (new Date(noon.toLocaleString('en-US', { timeZone: 'Europe/Lisbon' })) - new Date(noon.toLocaleString('en-US', { timeZone: 'UTC' }))) / 60_000
+    const target = new Date(lisbonDate + 'T00:00:00Z')
+    target.setUTCMinutes(15 * 60 - offsetMin)
+    if (target > now) return target
+  }
+  return new Date(now.getTime() + 86_400_000)
+}
+
+function fmtCountdown(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`
+  if (m > 0) return `${m}m ${String(sec).padStart(2, '0')}s`
+  return `${sec}s`
+}
 
 const POSITIONS = ['All', 'Forward', 'Midfielder', 'Defender', 'Goalkeeper']
 
@@ -38,10 +63,27 @@ export default function Market() {
   const [sortKey, setSortKey] = useState('changePct')
   const [sortDir, setSortDir] = useState(-1)
   const [scoutsMap, setScoutsMap] = useState({})
+  const [mdStatus, setMdStatus] = useState('scheduled')
+  const [mdEndsAt, setMdEndsAt] = useState(null)
+  const [, setTick] = useState(0)
 
   useEffect(() => {
     fetchAll()
+    // Tick every second for the countdown
+    const id = setInterval(() => setTick(t => t + 1), 1000)
+    return () => clearInterval(id)
   }, [user?.id])
+
+  // Subscribe to matchday_status for live/completed transitions
+  useEffect(() => {
+    supabase.from('matchday_status').select('status, ends_at').eq('id', 1).single()
+      .then(({ data }) => { if (data) { setMdStatus(data.status); setMdEndsAt(data.ends_at) } })
+    const ch = supabase.channel('market-md-status')
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'matchday_status', filter: 'id=eq.1' },
+        ({ new: row }) => { setMdStatus(row.status); setMdEndsAt(row.ends_at) })
+      .subscribe()
+    return () => { supabase.removeChannel(ch) }
+  }, [])
 
   async function fetchAll() {
     const [playersRes, trackerRes] = await Promise.all([
@@ -185,6 +227,8 @@ export default function Market() {
         />
       </div>
 
+      <MatchdayCountdown status={mdStatus} endsAt={mdEndsAt} />
+
       <div data-tutorial="market-filters" className="flex items-center gap-3 mb-6">
         {/* Scrollable chips */}
         <div className="flex items-center gap-2 overflow-x-auto flex-1 min-w-0 pb-0.5">
@@ -278,6 +322,39 @@ export default function Market() {
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+function MatchdayCountdown({ status, endsAt }) {
+  const remaining = status === 'live' && endsAt ? Math.max(0, new Date(endsAt) - Date.now()) : 0
+  const isLive = status === 'live' && remaining > 0
+  const isCompleted = status === 'completed' || (status === 'live' && endsAt != null && remaining === 0)
+  const nextMs = getNextMatchday15() - Date.now()
+
+  if (isLive) {
+    return (
+      <Link
+        to="/live"
+        className="flex items-center gap-2.5 bg-red-500/8 border border-red-500/25 rounded-xl px-4 py-2.5 mb-5 hover:bg-red-500/12 transition-colors group"
+      >
+        <span className="w-2 h-2 rounded-full bg-red-400 animate-pulse flex-shrink-0" />
+        <span className="text-sm font-semibold text-red-300">Matchday is LIVE</span>
+        <span className="text-sm text-red-400/70 ml-1">— prices are moving right now</span>
+        <span className="ml-auto text-xs font-semibold text-red-400 group-hover:text-red-300 transition-colors">Watch live →</span>
+      </Link>
+    )
+  }
+
+  return (
+    <div className="flex items-center gap-2.5 bg-[#111318] border border-[#1e2330] rounded-xl px-4 py-2.5 mb-5">
+      <span className="text-gray-600 text-sm">⚽</span>
+      <span className="text-sm text-gray-500">
+        {isCompleted ? 'Last match just finished ·' : 'Next matchday in'}
+      </span>
+      <span className="text-sm font-bold text-white tabular-nums">{fmtCountdown(nextMs)}</span>
+      <span className="text-gray-700 mx-1">·</span>
+      <span className="text-xs text-gray-600">daily at 3 pm Lisbon</span>
     </div>
   )
 }
