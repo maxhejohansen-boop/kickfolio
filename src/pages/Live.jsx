@@ -577,8 +577,8 @@ export default function Live() {
                     <tr className="border-b border-[#1e2330]">
                       <th className="text-left text-xs text-gray-600 font-medium px-4 py-2.5">Player</th>
                       <th className="text-center text-xs text-gray-600 font-medium px-3 py-2.5 w-10">Min</th>
-                      <th className="text-center text-xs text-gray-600 font-medium px-3 py-2.5 w-12">Stat 1</th>
-                      <th className="text-center text-xs text-gray-600 font-medium px-3 py-2.5 w-12">Stat 2</th>
+                      <th className="text-center text-xs text-gray-600 font-medium px-3 py-2.5 w-12">Gls/Svs</th>
+                      <th className="text-center text-xs text-gray-600 font-medium px-3 py-2.5 w-12">Ast/CS</th>
                       <th className="text-center text-xs text-gray-600 font-medium px-3 py-2.5 w-14">Rating</th>
                       <th className="text-right text-xs text-gray-600 font-medium px-4 py-2.5 w-20">Change</th>
                     </tr>

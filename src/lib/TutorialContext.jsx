@@ -33,7 +33,8 @@ export function TutorialProvider({ children }) {
       if (!isNaN(n) && n >= 1 && n <= 13) {
         setStep(n)
         setSubStep(0)
-        navigate(STEP_ROUTES[n])
+        // Step 7 is interactive — don't forcibly redirect so users can browse freely
+        if (n !== 7) navigate(STEP_ROUTES[n])
         return
       }
     }

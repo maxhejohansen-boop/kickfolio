@@ -14,6 +14,48 @@ export default function Navbar() {
   const menuRef = useRef(null)
   const [portfolioValue, setPortfolioValue] = useState(0)
   const [unreadCount, setUnreadCount] = useState(0)
+  const prevBalanceRef = useRef(null)
+  const [deltaPop, setDeltaPop] = useState(null) // { full, current, fading }
+  const tickerRef = useRef(null)
+
+  // Animate a delta chip when balance changes
+  useEffect(() => {
+    if (!userRecord) return
+    const newBal = Number(userRecord.balance ?? 0)
+
+    if (prevBalanceRef.current !== null) {
+      const delta = newBal - prevBalanceRef.current
+      if (Math.abs(delta) >= 0.01) {
+        if (tickerRef.current) clearInterval(tickerRef.current)
+
+        const totalMs = 1600
+        const intervalMs = 16
+        const steps = totalMs / intervalMs
+        let step = 0
+
+        setDeltaPop({ full: delta, current: delta, fading: false })
+
+        tickerRef.current = setInterval(() => {
+          step++
+          const progress = step / steps
+          if (progress >= 1) {
+            clearInterval(tickerRef.current)
+            tickerRef.current = null
+            setDeltaPop(prev => prev ? { ...prev, current: 0, fading: true } : null)
+            setTimeout(() => setDeltaPop(null), 350)
+            return
+          }
+          // quadratic ease-out: starts fast, slows to 0
+          const remaining = 1 - Math.pow(progress, 2)
+          setDeltaPop({ full: delta, current: delta * remaining, fading: false })
+        }, intervalMs)
+      }
+    }
+
+    prevBalanceRef.current = newBal
+  }, [userRecord?.balance])
+
+  useEffect(() => () => { if (tickerRef.current) clearInterval(tickerRef.current) }, [])
 
   useEffect(() => {
     if (!user) { setPortfolioValue(0); return }
@@ -113,21 +155,35 @@ export default function Navbar() {
             {user ? (
               <div ref={menuRef} className="relative">
                 {/* Balance / user area — click to open menu */}
-                <button
-                  data-tutorial="balance"
-                  onClick={() => setMenuOpen(m => !m)}
-                  className="hidden sm:flex flex-col items-end text-right cursor-pointer group"
-                >
-                  <span className="text-xs text-gray-500 group-hover:text-gray-300 transition-colors flex items-center gap-1">
-                    Cash
-                    <svg className={`w-3 h-3 text-gray-500 transition-transform ${menuOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-                    </svg>
-                  </span>
-                  <span className="text-sm font-bold text-white group-hover:text-green-300 transition-colors tabular-nums">
-                    £{userRecord ? (userRecord.balance ?? 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
-                  </span>
-                </button>
+                <div className="relative">
+                  {deltaPop && (
+                    <div
+                      style={{ opacity: deltaPop.fading ? 0 : 1, transition: 'opacity 0.35s ease' }}
+                      className={`absolute right-0 bottom-full mb-1.5 text-[11px] font-bold tabular-nums whitespace-nowrap px-2.5 py-0.5 rounded-full pointer-events-none select-none ${
+                        deltaPop.full > 0
+                          ? 'text-green-400 bg-green-500/15 border border-green-500/30'
+                          : 'text-red-400 bg-red-500/15 border border-red-500/30'
+                      }`}
+                    >
+                      {deltaPop.full > 0 ? '+' : '−'}£{Math.abs(deltaPop.current).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </div>
+                  )}
+                  <button
+                    data-tutorial="balance"
+                    onClick={() => setMenuOpen(m => !m)}
+                    className="hidden sm:flex flex-col items-end text-right cursor-pointer group"
+                  >
+                    <span className="text-xs text-gray-500 group-hover:text-gray-300 transition-colors flex items-center gap-1">
+                      Cash
+                      <svg className={`w-3 h-3 text-gray-500 transition-transform ${menuOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                      </svg>
+                    </span>
+                    <span className="text-sm font-bold text-white group-hover:text-green-300 transition-colors tabular-nums">
+                      £{userRecord ? (userRecord.balance ?? 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
+                    </span>
+                  </button>
+                </div>
 
                 {/* Mobile: just a sign-out icon */}
                 <button
@@ -161,6 +217,23 @@ export default function Navbar() {
                             £{userRecord ? ((userRecord.balance ?? 0) + portfolioValue).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
                           </span>
                         </div>
+                        {userRecord && (() => {
+                          const pl = (userRecord.balance ?? 0) + portfolioValue - 100_000
+                          const pct = (pl / 100_000) * 100
+                          return (
+                            <div className="flex justify-between items-center pt-1.5 mt-0.5 border-t border-[#1e2330]">
+                              <span className="text-xs text-gray-500">Lifetime P&L</span>
+                              <div className="text-right">
+                                <span className={`text-xs font-bold tabular-nums ${pl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                  {pl >= 0 ? '+' : ''}£{pl.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </span>
+                                <span className={`block text-[10px] tabular-nums ${pl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                  {pct >= 0 ? '+' : ''}{pct.toFixed(2)}%
+                                </span>
+                              </div>
+                            </div>
+                          )
+                        })()}
                       </div>
                     </div>
                     <button

@@ -60,8 +60,8 @@ export default function Market() {
   const [filter, setFilter] = useState('All')
   const [search, setSearch] = useState('')
   const [matchday, setMatchday] = useState(0)
-  const [sortKey, setSortKey] = useState('changePct')
-  const [sortDir, setSortDir] = useState(-1)
+  const [sortKey, setSortKey] = useState('current_price')
+  const [sortDir, setSortDir] = useState(1)
   const [scoutsMap, setScoutsMap] = useState({})
   const [mdStatus, setMdStatus] = useState('scheduled')
   const [mdEndsAt, setMdEndsAt] = useState(null)
@@ -157,11 +157,11 @@ export default function Market() {
     setFilter('All')
     setGradeFilter('All')
     setSearch('')
-    setSortKey('changePct')
-    setSortDir(-1)
+    setSortKey('current_price')
+    setSortDir(1)
   }
 
-  const filtersActive = filter !== 'All' || gradeFilter !== 'All' || search !== '' || sortKey !== 'changePct'
+  const filtersActive = filter !== 'All' || gradeFilter !== 'All' || search !== '' || !(sortKey === 'current_price' && sortDir === 1)
 
   const balance = userRecord?.balance ?? 0
 

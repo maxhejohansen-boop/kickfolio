@@ -69,6 +69,11 @@ export default function Portfolio() {
   const totalPL = currentValue - totalInvested
   const totalPLPct = totalInvested > 0 ? (totalPL / totalInvested) * 100 : 0
 
+  const STARTING_CAPITAL = 100_000
+  const totalWealth = (userRecord?.balance ?? 0) + currentValue
+  const lifetimePL = totalWealth - STARTING_CAPITAL
+  const lifetimePLPct = (lifetimePL / STARTING_CAPITAL) * 100
+
   if (!user) {
     return (
       <div className="max-w-7xl mx-auto px-4 py-16 text-center">
@@ -82,6 +87,29 @@ export default function Portfolio() {
   return (
     <div data-tutorial="portfolio-table" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
       <h1 className="text-2xl font-bold text-white mb-6">Portfolio</h1>
+
+      {/* Lifetime return banner */}
+      <div className={`rounded-xl border px-5 py-4 mb-5 flex items-center justify-between gap-4 ${
+        lifetimePL >= 0
+          ? 'bg-green-500/5 border-green-500/20'
+          : 'bg-red-500/5 border-red-500/20'
+      }`}>
+        <div>
+          <div className="text-xs text-gray-500 mb-1">Lifetime return — started with £100,000</div>
+          <div className={`text-2xl font-bold tabular-nums ${lifetimePL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+            {lifetimePL >= 0 ? '+' : ''}£{lifetimePL.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </div>
+          <div className="text-xs text-gray-500 mt-1 tabular-nums">
+            Total wealth: £{totalWealth.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </div>
+        </div>
+        <div className={`text-right flex-shrink-0`}>
+          <div className={`text-3xl font-black tabular-nums ${lifetimePL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+            {lifetimePLPct >= 0 ? '+' : ''}{lifetimePLPct.toFixed(2)}%
+          </div>
+          <div className="text-xs text-gray-600 mt-0.5">vs starting capital</div>
+        </div>
+      </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard label="Portfolio value" value={`£${currentValue.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />

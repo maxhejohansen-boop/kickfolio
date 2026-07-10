@@ -18,24 +18,13 @@ export default function Leaderboard() {
   useEffect(() => { fetchLeaderboard() }, [])
 
   async function fetchLeaderboard() {
-    const [usersRes, portfoliosRes] = await Promise.all([
-      supabase.from('users').select('id, email, balance'),
-      supabase.from('portfolios').select('user_id, shares, players(current_price)').gt('shares', 0),
-    ])
-
-    const users = usersRes.data ?? []
-    const holdingsByUser = {}
-    for (const p of portfoliosRes.data ?? []) {
-      holdingsByUser[p.user_id] = (holdingsByUser[p.user_id] ?? 0) + p.shares * p.players.current_price
-    }
-
-    const ranked = users.map(u => {
-      const holdingsValue = holdingsByUser[u.id] ?? 0
-      const totalValue = u.balance + holdingsValue
-      const earnings = totalValue - STARTING_BALANCE
-      return { ...u, holdingsValue, totalValue, earnings }
-    })
-
+    const { data } = await supabase.rpc('get_leaderboard')
+    const ranked = (data ?? []).map(u => ({
+      ...u,
+      holdingsValue: Number(u.portfolio_value),
+      totalValue: Number(u.total_value),
+      earnings: Number(u.total_value) - STARTING_BALANCE,
+    }))
     setEntries(ranked)
     setLoading(false)
   }
